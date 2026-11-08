@@ -24,6 +24,29 @@ python -m uvicorn main:app --port 3000
 Docker: `docker build -t fcs . && docker run -p 3000:3000 --env-file .env -v $PWD/data:/app/data fcs`.
 Defina `APP_PASSWORD` se publicar na internet. Use `DATA_DIR` em disco persistente.
 
+## Remotion real (renderização de cenas animadas)
+
+O render de cenas usa o Remotion de verdade (React + Chromium), não um fundo estático gerado pelo FFmpeg.
+
+**Windows**
+1. Instale Node.js 20 LTS ou superior.
+2. Na pasta principal do projeto, execute `INSTALAR_REMOTION_WINDOWS.bat` uma vez. O script instala as dependências e prepara o Chromium.
+3. Inicie o Faceless Studio normalmente com `INICIAR_WINDOWS.bat`.
+4. Na aba de estilos de vídeo, selecione um estilo, escreva o texto da cena e clique em **Renderizar Cena Remotion**.
+
+**Linux/macOS**
+```bash
+cd remotion
+npm install
+npx remotion browser ensure
+cd ..
+python -m uvicorn main:app --port 3000
+```
+
+O render padrão da interface é 720p para reduzir o uso de memória e CPU. A API aceita até Full HD dentro do limite de resolução. A primeira renderização demora mais porque precisa montar o bundle do Remotion; as seguintes reutilizam o cache de cenas idênticas.
+
+Se o Chromium não iniciar, confirme que o navegador do Remotion foi instalado e que o Node.js está no PATH. A variável opcional `REMOTION_CHROMIUM_EXECUTABLE_PATH` permite informar o caminho de um Chromium/Chrome compatível.
+
 ## Fluxo
 1. **Arquivos**: narração (MP3/WAV/M4A) e SRT. Sem narração? Gere pela Fish Audio na própria aba.
 2. **Mídia, Estilo, Áudio, Saída**: escolha fontes, template, música e formato (16:9, 9:16, 1:1; 720p/1080p).
