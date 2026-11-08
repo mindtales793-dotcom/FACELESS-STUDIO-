@@ -46,6 +46,7 @@ def render_scene(
 
     if out_path.exists() and out_path.stat().st_size > 0:
         return {
+            "ok": True,
             "url": f"/api/motion/{chave}.mp4",
             "path": str(out_path),
             "cache_hit": True,
@@ -120,6 +121,7 @@ def render_scene(
         props_file.unlink(missing_ok=True)
 
         return {
+            "ok": True,
             "url": f"/api/motion/{chave}.mp4",
             "path": str(out_path),
             "cache_hit": False,
