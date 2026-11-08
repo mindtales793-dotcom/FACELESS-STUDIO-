@@ -1,0 +1,29 @@
+name: Quality checks
+
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check Python syntax
+        run: python -m compileall -q main.py motion_render.py narration_engine.py
+      - name: Check Node syntax
+        run: npm test
+      - name: Install Remotion dependencies
+        working-directory: remotion
+        run: npm install --no-audit --no-fund
+      - name: Check Remotion TypeScript
+        working-directory: remotion
+        run: npx tsc --noEmit
