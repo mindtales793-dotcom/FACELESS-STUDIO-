@@ -31,6 +31,7 @@ import job_queue
 import keys_mgr
 import media_fetcher
 import media_providers
+import motion_render
 import skills
 import skills_video
 import narration_engine as nar
@@ -401,7 +402,7 @@ def flow_queue():
 
 
 @app.post("/api/flow/queue/retry")
-def flow_queue_retry(body: dict[str, Any]):
+def flow_queue_retry(body: dict[str, Any], background_tasks: BackgroundTasks):
     """Reprocessa um item da fila que deu erro."""
     item_id = body.get("id")
     if not item_id:
@@ -415,7 +416,6 @@ def flow_queue_retry(body: dict[str, Any]):
     item["status"] = "processando"
     item["erro"] = None
     _queue_save(item)
-    background_tasks = BackgroundTasks()
     background_tasks.add_task(_run_queue_item, item)
     return {"ok": True, "id": item_id}
 
@@ -1639,34 +1639,46 @@ MOTION_DIR.mkdir(parents=True, exist_ok=True)
 class MotionRenderBody(BaseModel):
     text: str
     duration: float = 5.0
-    width: int = 1920
-    height: int = 1080
+    width: int = 1280
+    height: int = 720
     cor_primaria: str = "#2F6FED"
     estilo: str = "documentario"
 
 
 @app.post("/api/motion/render")
 def render_motion_scene(body: MotionRenderBody):
-    """Renderiza uma cena com Remotion e devolve a URL do MP4."""
+    """Renderiza uma cena real com Remotion e devolve a URL do MP4."""
+    text = body.text.strip()
+    if not text or len(text) > 2000:
+        raise HTTPException(status_code=400, detail="O texto da cena deve ter entre 1 e 2.000 caracteres.")
+    if not 1 <= body.duration <= 30:
+        raise HTTPException(status_code=400, detail="A duração deve ficar entre 1 e 30 segundos.")
+    if not 240 <= body.width <= 1920 or not 240 <= body.height <= 1920:
+        raise HTTPException(status_code=400, detail="A resolução deve ficar entre 240 e 1.920 pixels por dimensão.")
+    if body.width * body.height > 2_073_600:
+        raise HTTPException(status_code=400, detail="A resolução máxima permitida é equivalente a Full HD.")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", body.cor_primaria):
+        raise HTTPException(status_code=400, detail="A cor primária deve estar no formato hexadecimal #RRGGBB.")
     try:
-        result = motion_render.render_scene(
-            text=body.text,
+        return motion_render.render_scene(
+            text=text,
             duration=body.duration,
             width=body.width,
             height=body.height,
             cor_primaria=body.cor_primaria,
             estilo=body.estilo,
         )
-        return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/motion/{filename}")
 def get_motion_video(filename: str):
-    """Serve um vídeo renderizado pelo Remotion."""
+    """Serve somente arquivos MP4 gerados pelo renderizador."""
+    if not re.fullmatch(r"[a-f0-9]{16}\.mp4", filename):
+        raise HTTPException(status_code=404, detail="Vídeo não encontrado.")
     file_path = MOTION_DIR / filename
-    if not file_path.exists():
+    if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Vídeo não encontrado.")
     return FileResponse(file_path, media_type="video/mp4", filename=filename)
 
