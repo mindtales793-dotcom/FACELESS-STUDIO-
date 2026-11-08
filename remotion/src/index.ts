@@ -1,4 +1,4 @@
-import { registerRoot } from "@remotion/cli";
-import { FacelessScene } from "./compositions/FacelessScene";
+import { registerRoot } from "remotion";
+import { RemotionRoot } from "./Root";
 
-registerRoot(FacelessScene);
+registerRoot(RemotionRoot);
