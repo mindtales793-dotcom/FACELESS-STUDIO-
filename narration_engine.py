@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -293,7 +294,16 @@ class NarrationCache:
 
     def put(self, fingerprint: str, file_name: str, duration: float,
             text: str, reference_id: str | None, model: str,
-            speed: float, stability: float, expressiveness: float) -> None:
+            speed: float, stability: float, expressiveness: float,
+            source_file: Path | None = None) -> None:
+        """Persiste o áudio no diretório global do cache antes de indexá-lo."""
+        target = self.dir / file_name
+        if source_file and source_file.exists():
+            temporary = target.with_suffix(target.suffix + ".tmp")
+            shutil.copy2(source_file, temporary)
+            temporary.replace(target)
+        if not target.exists():
+            raise RuntimeError("Não foi possível persistir o áudio no cache.")
         self._index[fingerprint] = {
             "file": file_name,
             "duration": duration,
@@ -568,32 +578,31 @@ class NarrationEngine:
             ffmpeg = ffmpeg_path()
             ffprobe = ffprobe_path()
 
-            # Teste rápido de conexão
-            try:
-                fish_tts_bytes("ok", reference_id, model, api_key,
-                               speed, stability, expressiveness)
-            except Exception as conn_exc:
-                raise RuntimeError(
-                    "Não foi possível conectar ao Fish Audio. Verifique sua "
-                    f"chave FISH_API_KEY e a conexão com a internet. Detalhe: {conn_exc}"
-                )
-
-            # Filtra blocos que precisam ser gerados (não estão em cache)
-            blocks_to_generate = [
-                (i, b) for i, b in enumerate(blocks)
-                if not b.get("cached") and b.get("status") != "complete"
-            ]
-
+            # Não faz chamada TTS de teste: a primeira geração real valida a chave
+            # e evita gastar uma requisição adicional com o texto artificial "ok".
             total_blocks = len(blocks)
-            completed_blocks = sum(1 for b in blocks if b.get("status") == "complete")
             durations: list[float] = [0.0] * total_blocks
             files: list[Path] = [None] * total_blocks  # type: ignore
+            blocks_to_generate: list[tuple[int, dict[str, Any]]] = []
 
-            # Preenche durações de blocos em cache
-            for b in blocks:
-                if b.get("cached") and b.get("duration") is not None:
-                    idx = b["index"]
-                    durations[idx] = b["duration"]
+            # Restaura cada hit do cache para a pasta deste job. O arquivo global
+            # permanece intacto e pode ser reutilizado por futuras narrações.
+            for idx, b in enumerate(blocks):
+                cached = self.cache.get(b["fingerprint"]) if b.get("cached") else None
+                if cached:
+                    cached_file = self.cache.dir / cached["file"]
+                    job_file = folder / f"chunk_{idx:03d}.mp3"
+                    shutil.copy2(cached_file, job_file)
+                    files[idx] = job_file
+                    durations[idx] = max(0.25, float(cached.get("duration") or 0.25))
+                    b["status"] = "complete"
+                    b["duration"] = durations[idx]
+                else:
+                    b["cached"] = False
+                    b["status"] = "pending"
+                    blocks_to_generate.append((idx, b))
+
+            completed_blocks = sum(1 for b in blocks if b.get("status") == "complete")
 
             # Processa em paralelo com concorrência controlada
             executor = ThreadPoolExecutor(max_workers=max_concurrent)
@@ -608,7 +617,11 @@ class NarrationEngine:
                     b["status"] = "complete"
                     b["cached"] = True
                     b["duration"] = cached.get("duration")
-                    durations[idx] = cached.get("duration", 0.0)
+                    durations[idx] = max(0.25, float(cached.get("duration") or 0.25))
+                    cached_file = self.cache.dir / cached["file"]
+                    job_file = folder / f"chunk_{idx:03d}.mp3"
+                    shutil.copy2(cached_file, job_file)
+                    files[idx] = job_file
                     completed_blocks += 1
                     continue
 
@@ -656,9 +669,10 @@ class NarrationEngine:
 
                     # Salva no cache
                     fp = b["fingerprint"]
-                    self.cache.put(fp, chunk_file.name, durations[idx],
+                    self.cache.put(fp, f"{fp}.mp3", durations[idx],
                                    b["text"], reference_id, model,
-                                   speed, stability, expressiveness)
+                                   speed, stability, expressiveness,
+                                   source_file=chunk_file)
 
                     completed_blocks += 1
                     progress = int(80 * completed_blocks / total_blocks) if total_blocks else 100
@@ -765,10 +779,12 @@ class NarrationEngine:
         pause_file = output.parent / "pause_03s.mp3"
         subprocess.run(
             [ffmpeg, "-y", "-f", "lavfi", "-i",
-             "anoisesrc=d=0.3:r=44100:c=mono", "-c:a", "libmp3lame",
-             "-b:a", "128k", str(pause_file)],
+             "anullsrc=r=44100:cl=mono", "-t", "0.3",
+             "-c:a", "libmp3lame", "-b:a", "128k", str(pause_file)],
             capture_output=True, text=True, timeout=60,
         )
+        if not pause_file.exists():
+            raise RuntimeError("FFmpeg não conseguiu criar o silêncio entre os blocos.")
 
         all_files: list[Path] = []
         for i, f in enumerate(files):
