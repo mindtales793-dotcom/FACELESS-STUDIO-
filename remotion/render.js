@@ -1,110 +1,89 @@
-﻿// render.js - Script chamado pelo Python para renderizar cena Remotion
-// Uso: node render.js <props.json> <output.mp4> <ffmpeg_path>
-//
-// ESTRATÉGIA:
-// 1. FFmpeg primeiro (rápido, confiável, funciona agora)
-// 2. Remotion real está ESTRUTURADO e pronto para ativar
-//    - Projeto oficial: C:\Users\Lucas\my-video
-//    - Componente: HelloWorld (aceita titleText e titleColor)
-//    - Para ativar Remotion real: descomentar a seção ABAIXO
-//      e garantir que o Chromium esteja acessível
+"use strict";
 
-const { execFileSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { bundle } = require("@remotion/bundler");
+const { renderMedia, selectComposition } = require("@remotion/renderer");
 
-const PROPS_FILE = process.argv[2];
-const OUTPUT_FILE = process.argv[3];
-const FFMPEG_PATH = process.argv[4] || "ffmpeg";
+const propsFile = process.argv[2];
+const outputFile = process.argv[3];
 
-if (!PROPS_FILE || !OUTPUT_FILE) {
-  process.exit(1);
-}
-
-const props = JSON.parse(fs.readFileSync(PROPS_FILE, "utf-8"));
-const OUT_DIR = path.dirname(OUTPUT_FILE);
-
-if (!fs.existsSync(OUT_DIR)) {
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-}
-
-// =====================================================================
-// FFmpeg render (funciona agora, sem dependências extras)
-// =====================================================================
-function ffmpegRender() {
-  const largura = props.width || 1920;
-  const altura = props.height || 1080;
-  const hex = (props.cor_primaria || "#2F6FED").replace("#", "0x");
-  const duracao = props.duration || 5;
-
-  execFileSync(
-    FFMPEG_PATH,
-    [
-      "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-      `color=c=${hex}:s=${largura}x${altura}:r=24:d=${duracao}`,
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-t", String(duracao),
-      OUTPUT_FILE,
-    ],
-    { timeout: 120000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 }
-  );
-}
-
-// =====================================================================
-// Remotion real (projeto oficial my-video - descomentar para ativar)
-// =====================================================================
-/*
-const { renderMedia } = require("@remotion/renderer");
-
-function tryRemotionRenderer() {
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      reject(new Error("Remotion timeout (180s)"));
-    }, 180000);
-
-    renderMedia({
-      composition: "HelloWorld",
-      entryPoint: "C:\\Users\\Lucas\\my-video\\src\\index.ts",
-      inputProps: {
-        titleText: props.text || "Faceless Cloud Studio",
-        titleColor: props.cor_primaria || "#2F6FED",
-      },
-      outputLocation: OUTPUT_FILE,
-      codec: "h264",
-      fps: 30,
-      durationInFrames: Math.ceil((props.duration || 5) * 30),
-      imageFormat: "jpeg",
-      jpegQuality: 90,
-      browserExecutable: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-      chromiumOptions: {
-        args: [
-          "--headless",
-          "--no-sandbox",
-          "--disable-gpu",
-          "--disable-dev-shm-usage",
-          "--disable-setuid-sandbox",
-          "--disable-web-security",
-        ],
-      },
-      envVariables: { REMOTION_CHROMIUM_EXECUTABLE_PATH: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
-    })
-      .then(() => {
-        clearTimeout(timeoutId);
-        resolve();
-      })
-      .catch((err) => {
-        clearTimeout(timeoutId);
-        reject(err);
-      });
-  });
-}
-*/
-
-(async () => {
-  try {
-    ffmpegRender();
-    console.log(JSON.stringify({ ok: true, output: OUTPUT_FILE, method: "ffmpeg" }));
-  } catch (err) {
-    console.error(JSON.stringify({ ok: false, error: String(err) }));
-    process.exit(1);
+async function main() {
+  if (!propsFile || !outputFile) {
+    throw new Error("Uso: node render.js <props.json> <saida.mp4>");
   }
-})();
+  if (!fs.existsSync(propsFile)) {
+    throw new Error(`Arquivo de propriedades não encontrado: ${propsFile}`);
+  }
+
+  const props = JSON.parse(fs.readFileSync(propsFile, "utf8"));
+  const duration = Number(props.duration || 5);
+  const width = Number(props.width || 1280);
+  const height = Number(props.height || 720);
+
+  if (!String(props.text || "").trim()) throw new Error("O texto da cena está vazio.");
+  if (!Number.isFinite(duration) || duration < 1 || duration > 30) {
+    throw new Error("A duração deve estar entre 1 e 30 segundos.");
+  }
+  if (!Number.isInteger(width) || !Number.isInteger(height) ||
+      width < 240 || height < 240 || width > 1920 || height > 1920 ||
+      width * height > 2073600) {
+    throw new Error("Resolução inválida ou acima do limite Full HD.");
+  }
+
+  const entryPoint = path.join(__dirname, "src", "index.ts");
+  const serveUrl = await bundle({
+    entryPoint,
+    onProgress: (progress) => {
+      if (process.env.REMOTION_VERBOSE === "1") {
+        process.stderr.write(`Bundle Remotion: ${Math.round(progress * 100)}%\\n`);
+      }
+    },
+  });
+
+  const composition = await selectComposition({
+    serveUrl,
+    id: "FacelessScene",
+    inputProps: props,
+  });
+
+  const options = {
+    composition,
+    serveUrl,
+    codec: "h264",
+    outputLocation: path.resolve(outputFile),
+    inputProps: props,
+    concurrency: Math.max(1, Math.min(4, os.cpus().length - 1)),
+    chromiumOptions: {
+      gl: "angle",
+      disableWebSecurity: false,
+    },
+  };
+
+  if (process.env.REMOTION_CHROMIUM_EXECUTABLE_PATH) {
+    options.browserExecutable = process.env.REMOTION_CHROMIUM_EXECUTABLE_PATH;
+  }
+
+  await renderMedia(options);
+  const stat = fs.statSync(options.outputLocation);
+  if (!stat.size) throw new Error("O Remotion gerou um arquivo vazio.");
+
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    output: options.outputLocation,
+    method: "remotion",
+    duration,
+    width,
+    height,
+    bytes: stat.size,
+  }) + "\\n");
+}
+
+main().catch((error) => {
+  process.stderr.write(JSON.stringify({
+    ok: false,
+    error: error && error.stack ? error.stack : String(error),
+  }) + "\\n");
+  process.exitCode = 1;
+});
