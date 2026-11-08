@@ -74,7 +74,6 @@ export const FacelessScene: React.FC<FacelessSceneProps> = ({
             lineHeight: 1.12,
             fontWeight: 800,
             color: colors.text,
-            textWrap: "balance",
           }}
         >
           {title}
