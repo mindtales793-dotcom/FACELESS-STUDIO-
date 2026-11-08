@@ -1633,7 +1633,8 @@ async def shutdown_narration_proxy():
 
 
 # ------------------------------------------------------------------ motion graphics (Remotion)
-MOTION_DIR = Path(__file__).resolve().parent / "data" / "motion"
+# Usa o mesmo diretório configurado pelo store/DATA_DIR no renderizador.
+MOTION_DIR = motion_render.MOTION_DIR
 MOTION_DIR.mkdir(parents=True, exist_ok=True)
 
 class MotionRenderBody(BaseModel):
