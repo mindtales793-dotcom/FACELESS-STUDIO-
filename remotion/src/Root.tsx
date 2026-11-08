@@ -20,10 +20,13 @@ export const RemotionRoot: React.FC = () => (
     width={1280}
     height={720}
     defaultProps={defaultProps}
-    calculateMetadata={({ props }) => ({
-      durationInFrames: Math.max(1, Math.ceil(props.duration * 24)),
-      width: props.width,
-      height: props.height,
-    })}
+    calculateMetadata={({ props }) => {
+      const sceneProps = props as unknown as FacelessSceneProps;
+      return {
+        durationInFrames: Math.max(1, Math.ceil(sceneProps.duration * 24)),
+        width: sceneProps.width,
+        height: sceneProps.height,
+      };
+    }}
   />
 );
