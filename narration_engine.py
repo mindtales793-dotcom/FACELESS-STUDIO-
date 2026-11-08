@@ -299,7 +299,7 @@ class NarrationCache:
         """Persiste o áudio no diretório global do cache antes de indexá-lo."""
         target = self.dir / file_name
         if source_file and source_file.exists():
-            temporary = target.with_suffix(target.suffix + ".tmp")
+            temporary = self.dir / f"{fingerprint}.{uuid.uuid4().hex}.tmp"
             shutil.copy2(source_file, temporary)
             temporary.replace(target)
         if not target.exists():
@@ -777,14 +777,17 @@ class NarrationEngine:
 
         # Cria um arquivo de silêncio de 0.3s para pausas entre blocos
         pause_file = output.parent / "pause_03s.mp3"
-        subprocess.run(
+        pause_result = subprocess.run(
             [ffmpeg, "-y", "-f", "lavfi", "-i",
              "anullsrc=r=44100:cl=mono", "-t", "0.3",
              "-c:a", "libmp3lame", "-b:a", "128k", str(pause_file)],
             capture_output=True, text=True, timeout=60,
         )
-        if not pause_file.exists():
-            raise RuntimeError("FFmpeg não conseguiu criar o silêncio entre os blocos.")
+        if pause_result.returncode != 0 or not pause_file.is_file() or pause_file.stat().st_size == 0:
+            raise RuntimeError(
+                "FFmpeg não conseguiu criar o silêncio entre os blocos: "
+                f"{(pause_result.stderr or pause_result.stdout)[-800:]}"
+            )
 
         all_files: list[Path] = []
         for i, f in enumerate(files):
