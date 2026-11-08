@@ -1224,8 +1224,8 @@ async function renderMotionScene() {
     const res = await jpost('/api/motion/render', {
       text,
       duration,
-      width: 1920,
-      height: 1080,
+      width: 1280,
+      height: 720,
       cor_primaria: estilo.cor_primaria || '#2F6FED',
       estilo: estilo.id || 'documentario',
     });
