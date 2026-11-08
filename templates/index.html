@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#080d1a" />
+  <title>Faceless Cloud Studio</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <div class="brand-mark"><span></span><span></span><span></span></div>
+        <div><strong>FACELESS</strong><small>CLOUD STUDIO</small></div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item on" data-view="create"><i data-ic="spark"></i><span>Novo vídeo</span></button>
+        <button class="nav-item" data-view="projects"><i data-ic="film"></i><span>Projetos</span><b class="nav-count" id="projectCount">0</b></button>
+        <button class="nav-item" data-view="flow"><i data-ic="spark"></i><span>Flow AI</span></button>
+        <button class="nav-item" data-view="flowblocks"><i data-ic="image"></i><span>Flow Blocos · 2D</span></button>
+        <button class="nav-item" data-view="groq"><i data-ic="mic"></i><span>Transcrição Groq</span></button>
+        <button class="nav-item" data-view="skills"><i data-ic="sliders"></i><span>Roteiros (Skills)</span></button>
+        <button class="nav-item" data-view="skills-video"><i data-ic="film"></i><span>Estilos de Vídeo (Skills)</span></button>
+        <button class="nav-item" data-view="keys"><i data-ic="sliders"></i><span>Chaves de API</span></button>
+      </nav>
+      <div class="side-card">
+        <div class="side-card-title">SERVIDOR</div>
+        <ul class="health" id="healthList"><li><span class="dot"></span> Verificando…</li></ul>
+      </div>
+      <div class="side-foot"><span class="tiny">v0.4 · beta privado</span><button class="icon-btn" id="logoutBtn" title="Sair" hidden><i data-ic="x"></i></button></div>
+    </aside>
+
+    <main class="main">
+      <!-- ============================================ NOVO VÍDEO -->
+      <section id="viewCreate" class="view">
+        <header class="page-head">
+          <div><div class="eyebrow">ROBÔ DE VÍDEO</div><h1>Do roteiro ao vídeo pronto</h1><p>Escolha de onde vêm as imagens, o estilo, a música e o formato. O robô faz o resto e mostra cada etapa.</p></div>
+        </header>
+        <div class="tabs" id="createTabs" role="tablist"></div>
+        <div class="pane" id="createPane"></div>
+        <div class="create-bar">
+          <button class="btn ghost" id="prevTab"><i data-ic="arrow-left"></i> Voltar</button>
+          <div class="create-summary" id="createSummary"></div>
+          <button class="btn" id="nextTab">Próximo <i data-ic="arrow-right"></i></button>
+          <button class="btn primary" id="submitProject" hidden><i data-ic="bot"></i> Criar e iniciar o robô</button>
+        </div>
+        <div class="form-error" id="formError" hidden></div>
+      </section>
+
+      <!-- ============================================ PROJETOS -->
+      <section id="viewProjects" class="view" hidden>
+        <header class="page-head">
+          <div><div class="eyebrow">BIBLIOTECA</div><h1>Seus projetos</h1><p>Abra um projeto para ver o que o robô fez, revisar as cenas, baixar o MP4 ou exportar para o CapCut.</p></div>
+          <button class="btn ghost" id="refreshProjects"><i data-ic="refresh"></i> Atualizar</button>
+        </header>
+        <div class="project-grid" id="projectList"></div>
+      </section>
+
+      <!-- ============================================ PROJETO -->
+      <section id="viewProject" class="view" hidden>
+        <button class="btn ghost small" id="backToProjects"><i data-ic="arrow-left"></i> Projetos</button>
+        <header class="page-head tight">
+          <div><div class="eyebrow" id="projMeta">PROJETO</div><h1 id="projTitle">Projeto</h1></div>
+          <div class="head-actions">
+            <span class="badge" id="projStatus">—</span>
+            <button class="btn ghost" id="editSettings"><i data-ic="sliders"></i> Estilo e áudio</button>
+            <button class="btn danger ghost" id="cancelJob" hidden><i data-ic="x"></i> Cancelar</button>
+          </div>
+        </header>
+
+        <div class="robot-grid">
+          <div class="card robot-card">
+            <div class="robot-top">
+              <div class="robot" id="robot" data-state="idle"><div class="robot-antenna"></div><div class="robot-head"><i></i><i></i></div><div class="robot-body"></div></div>
+              <div class="robot-say"><div class="eyebrow">O ROBÔ ESTÁ</div><strong id="robotNow">Aguardando</strong><span id="robotSub"></span></div>
+            </div>
+            <div class="overall"><div class="overall-row"><span>Progresso total</span><b id="overallPct">0%</b></div><div class="track"><div id="overallBar"></div></div></div>
+            <ol class="stages" id="stageList"></ol>
+          </div>
+          <div class="card log-card">
+            <div class="log-head"><span><i data-ic="terminal"></i> Registro ao vivo</span><button class="text-btn" id="clearLog">limpar</button></div>
+            <div class="log" id="logBox" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="card action-card" id="actionCard" hidden></div>
+        <div class="card result-card" id="resultCard" hidden></div>
+        <div class="card groq-card" id="groqProjectCard" hidden></div>
+
+        <div class="section-head" id="sceneHead" hidden>
+          <div><h2>Cenas</h2><p id="sceneHint">Escolha a mídia de cada cena. Você pode buscar de novo, enviar um arquivo seu ou gerar com IA.</p></div>
+          <div class="scene-tools"><button class="btn ghost small" id="autoPickBtn"><i data-ic="spark"></i> Escolha automática</button><button class="btn ghost small" id="researchAllBtn"><i data-ic="search"></i> Buscar tudo de novo</button><button class="btn ghost small" id="researchEmptyBtn"><i data-ic="search"></i> Buscar apenas as que faltam</button></div>
+        </div>
+        <div class="scene-grid" id="sceneGrid"></div>
+
+        </section>
+
+      <!-- ============================================ FLOW AI -->
+      <section id="viewFlow" class="view" hidden>
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">GOOGLE FLOW</div>
+            <h1>Flow AI</h1>
+            <p>Criação de imagens e vídeos pelos modelos oficiais.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn ghost" id="refreshFlowBtn"><i data-ic="refresh"></i> Atualizar galeria</button>
+          </div>
+        </header>
+
+        <!-- ===================================================================
+             FILA DE GERAÇÃO (PARTE DE CIMA)
+             =================================================================== -->
+        <div class="card">
+          <div class="card-title">
+            <div>
+              <h3><i data-ic="list"></i> Fila de Geração</h3>
+              <p>Imagens e vídeos sendo produzidos. Itens com erro podem ser refeitos individualmente.</p>
+            </div>
+            <div class="row" style="gap:8px;align-items:center;margin-top:6px">
+              <span class="chip" id="flowQueueCount">0 itens</span>
+              <button type="button" class="btn ghost small" id="flowQueueClearBtn"><i data-ic="trash"></i> Limpar concluídos</button>
+            </div>
+          </div>
+          <div class="stack">
+            <div id="flowQueueProgress" style="margin-bottom:10px;border:1px solid var(--line2);border-radius:10px;background:rgba(10,18,34,.4);padding:10px">
+              <div class="spread tiny" style="margin-bottom:6px"><span id="flowQueueMsg">Ocioso</span><span id="flowQueuePct">0%</span></div>
+              <div class="track"><div id="flowQueueFill"></div></div>
+            </div>
+            <div class="project-grid" id="flowQueueGrid">
+              <div class="empty" style="grid-column:1/-1">Nenhum item na fila ainda.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===================================================================
+             GERAÇÃO INDIVIDUAL E LOTE (MEIO)
+             =================================================================== -->
+        <div class="grid2" style="align-items:start;margin-top:14px">
+          <!-- Card de Geração Flow Individual -->
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="spark"></i> Criar com IA (Google Flow)</h3>
+                <p>Criação direta de imagens e vídeos pelos modelos oficiais.</p>
+              </div>
+              <span class="pill ok" id="flowApiPill">● Verificando…</span>
+            </div>
+            <div class="stack">
+              <div class="field">
+                <span>Modelo do Flow</span>
+                <select id="flowModelSelect">
+                  <option value="harbor_seal">Harbor Seal (Imagem - Flow Agent)</option>
+                  <option value="narwhal">Narwhal (Imagem - Flow Agent)</option>
+                  <option value="gemini-2.5-flash-image">Nano Banana (Gemini API)</option>
+                  <option value="veo">Veo (Vídeo - Flow Agent)</option>
+                  <option value="veo-3.1-fast-generate-preview">Veo 3.1 (Vídeo - Gemini API)</option>
+                </select>
+                <small class="hint">Se o Flow Agent estiver ativo, use Harbor Seal ou Narwhal. Senão, use a Gemini API.</small>
+              </div>
+
+              <div class="field">
+                <span>Tipo de geração</span>
+                <div class="seg" id="flowKindSeg">
+                  <button type="button" class="on" data-flowkind="image">Imagem</button>
+                  <button type="button" data-flowkind="video">Vídeo</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <span>Prompt (descreva a cena)</span>
+                <textarea id="flowPromptInput" rows="4" placeholder="Ex.: A cinematic drone shot of ancient ruins in a misty jungle at golden hour, 4k ultra realistic"></textarea>
+                <div class="quick" style="margin-top:4px">
+                  <button type="button" class="btn ghost small flow-preset" data-preset="Cinematic aerial view of futuristic cyberpunk Tokyo at night with rain and neon lights">Cyberpunk</button>
+                  <button type="button" class="btn ghost small flow-preset" data-preset="Dramatic wide shot of an epic medieval castle on a stormy cliff with lightning">Castelo Medieval</button>
+                  <button type="button" class="btn ghost small flow-preset" data-preset="Peaceful sunset over calm turquoise ocean with gentle waves and palm trees">Pôr do Sol</button>
+                  <button type="button" class="btn ghost small flow-preset" data-preset="Ancient biblical desert temple caravan under a star-filled starry night sky">Bíblico / Épico</button>
+                </div>
+              </div>
+
+              <!-- Imagem de referência -->
+              <div class="drop s" id="flowRefDrop" style="min-height:110px;margin-top:8px">
+                <span class="req opt">OPCIONAL</span><div class="ico"><i data-ic="image"></i></div><strong>Imagem de referência</strong>
+                <small>Envie uma PNG, JPG ou WebP para usar como referência na geração (apenas via Flow Agent).</small>
+                <span class="picked" id="flowRefName">Nenhuma imagem escolhida</span>
+                <input type="file" id="flowRefFile" accept=".png,.jpg,.jpeg,.webp,image/*">
+              </div>
+
+              <div class="grid2">
+                <div class="field">
+                  <span>Proporção</span>
+                  <select id="flowRatioSelect">
+                    <option value="16:9" selected>16:9 · Horizontal (YouTube / TV)</option>
+                    <option value="9:16">9:16 · Vertical (Shorts / Reels)</option>
+                    <option value="1:1">1:1 · Quadrado (Feed)</option>
+                  </select>
+                </div>
+                <div class="field" id="flowDurationField" style="display:none">
+                  <span>Duração do clipe</span>
+                  <select id="flowDurationSelect">
+                    <option value="4">4 segundos</option>
+                    <option value="6" selected>6 segundos (recomendado)</option>
+                    <option value="8">8 segundos</option>
+                  </select>
+                </div>
+              </div>
+
+              <button type="button" class="btn primary" id="flowGenerateSubmit">
+                <i data-ic="spark"></i> Adicionar à fila
+              </button>
+
+              <div id="flowGeneratingStatus" hidden class="gen-msg" style="padding:12px;border:1px solid var(--line2);border-radius:10px;background:rgba(10,18,34,.7)">
+                <span class="spin"></span> <span id="flowGeneratingText">Enviando para a fila...</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card de Geração em Lote -->
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="box"></i> Geração em lote · Prompts infinitos</h3>
+                <p>Cole quantos prompts quiser (um por linha) ou envie um arquivo TXT. Cada um entra na fila individualmente.</p>
+              </div>
+              <span class="pill ok" id="flowBatchApiPill">● Verificando…</span>
+            </div>
+            <div class="stack">
+              <div class="field">
+                <span>Prompts (um por linha)</span>
+                <textarea id="flowBatchPrompts" rows="6" placeholder="Cinematic aerial view of futuristic cyberpunk Tokyo at night
+Dramatic wide shot of an epic medieval castle on a stormy cliff
+Peaceful sunset over calm turquoise ocean with gentle waves
+Ancient biblical desert temple caravan under a star-filled night sky"></textarea>
+                <small class="hint" id="flowBatchCountHint">0 prompts</small>
+              </div>
+
+              <!-- Upload TXT -->
+              <div class="drop s" id="flowTxtDrop" style="min-height:110px;margin-top:8px">
+                <span class="req opt">OPCIONAL</span><div class="ico"><i data-ic="file"></i></div><strong>Ou envie arquivo TXT</strong>
+                <small>Arquivo com um prompt por linha (máximo 500).</small>
+                <span class="picked" id="flowTxtName">Nenhum arquivo escolhido</span>
+                <input type="file" id="flowTxtFile" accept=".txt,text/plain">
+              </div>
+
+              <div class="grid2">
+                <div class="field">
+                  <span>Tipo de geração</span>
+                  <div class="seg" id="flowBatchKindSeg">
+                    <button type="button" class="on" data-flowkind="image">Imagem</button>
+                    <button type="button" data-flowkind="video">Vídeo</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <span>Proporção</span>
+                  <select id="flowBatchRatioSelect">
+                    <option value="16:9" selected>16:9 · Horizontal</option>
+                    <option value="9:16">9:16 · Vertical</option>
+                    <option value="1:1">1:1 · Quadrado</option>
+                  </select>
+                </div>
+                <div class="field" id="flowBatchDurationField" style="display:none">
+                  <span>Duração do clipe</span>
+                  <select id="flowBatchDurationSelect">
+                    <option value="4">4 segundos</option>
+                    <option value="6" selected>6 segundos (recomendado)</option>
+                    <option value="8">8 segundos</option>
+                  </select>
+                </div>
+              </div>
+
+              <button type="button" class="btn primary" id="flowBatchGenerateSubmit">
+                <i data-ic="spark"></i> Adicionar todos à fila
+              </button>
+
+              <div id="flowBatchProgress" hidden style="margin-top:12px;border:1px solid var(--line2);border-radius:10px;background:rgba(10,18,34,.7);padding:12px">
+                <div class="spread tiny" style="margin-bottom:6px"><span id="flowBatchMsg">Iniciando lote…</span><span id="flowBatchPct">0%</span></div>
+                <div class="track"><div id="flowBatchFill"></div></div>
+              </div>
+              <div id="flowBatchResultList" style="margin-top:10px"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===================================================================
+             CONEXÃO MCP & CONTA (PARTE DE BAIXO)
+             =================================================================== -->
+        <div class="card" style="margin-top:14px">
+          <div class="card-title">
+            <div>
+              <h3><i data-ic="terminal"></i> Conexão MCP & Conta</h3>
+              <p>Conecte o Claude Desktop ou outro cliente MCP ao seu estúdio.</p>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="note info">
+              <b>O que é o MCP?</b> O Model Context Protocol permite que clientes como Claude Desktop ou Claude Code gerem imagens e vídeos do Flow diretamente no seu estúdio e consultem seus projetos.
+            </div>
+
+            <div class="field">
+              <span>Configuração do Claude Desktop (claude_desktop_config.json)</span>
+              <textarea id="mcpConfigJson" rows="6" readonly style="font-family:var(--mono);font-size:11.5px;color:#a9ccde"></textarea>
+            </div>
+            <div class="row">
+              <button type="button" class="btn ghost small" id="copyMcpConfigBtn"><i data-ic="copy"></i> Copiar configuração MCP</button>
+              <button type="button" class="btn ghost small" id="goToKeysBtn"><i data-ic="sliders"></i> Ajustar chave Gemini</button>
+            </div>
+
+            <div class="field" style="margin-top:6px">
+              <span>Modelos do Flow Conectados</span>
+              <div class="tags" id="flowModelsTags">
+                <span class="tag">Nano Banana (gemini-2.5-flash-image)</span>
+                <span class="tag">Veo 3.1 (veo-3.1-fast-generate-preview)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card de Configuração Flow Agent (extensão Chrome) -->
+        <div class="card" style="margin-top:14px">
+          <div class="card-title">
+            <div>
+              <h3><i data-ic="chrome"></i> Flow Agent · Extensão Chrome</h3>
+              <p>Conecta ao servidor local do Flow Agent (kodelyx/flow-agent) para gerar imagens e vídeos através da extensão do Chrome logada na sua conta do Google Flow.</p>
+            </div>
+            <span class="pill off" id="flowAgentStatusPill">● Desconectado</span>
+          </div>
+          <div class="stack">
+            <div class="row" style="gap:12px;align-items:flex-end;margin-bottom:8px">
+              <label class="switch"><input type="checkbox" id="flowAgentEnabled"><span class="sw"></span><div><b>Ativar Flow Agent</b><small>Usar servidor local em vez da Gemini API direta</small></div></label>
+            </div>
+            <label class="field"><span>URL do servidor Flow Agent</span><input type="text" id="flowAgentUrl" placeholder="http://localhost:8001" value="http://localhost:8001"><small>O servidor deve estar rodando localmente (python main.py server)</small></label>
+            <div class="row" style="gap:8px;align-items:center">
+              <button type="button" class="btn ghost small" id="flowAgentTestBtn"><i data-ic="chrome"></i> Testar conexão</button>
+              <span class="tiny" id="flowAgentStatusMsg">Não testado ainda</span>
+            </div>
+            <div id="flowAgentStatusDetail" style="margin-top:8px;padding:10px;border:1px solid var(--line2);border-radius:8px;background:rgba(10,18,34,.4);font-size:12px;color:var(--muted);display:none"></div>
+            <div class="note warn" style="margin-top:10px"><b>Como configurar:</b> 1) Baixe o <a href="https://github.com/kodelyx/flow-agent" target="_blank" rel="noopener">flow-agent</a>. 2) Instale a extensão do Chrome da pasta <code>flow-extension/</code>. 3) Na pasta do flow-agent, rode <code>python main.py server</code>. 4) Em outro terminal, rode <code>bin\flow.exe bridge</code>. 5) Abra o Google Flow no Chrome e faça login. 6) Cole a URL aqui (ex: <code>http://localhost:8001</code>), ative e clique em Testar conexão.</div>
+          </div>
+        </div>
+
+        <!-- Galeria de Mídias Geradas & Download -->
+        <div class="card" style="margin-top:14px">
+          <div class="card-title">
+            <div>
+              <h3><i data-ic="image"></i> Galeria de Mídias Geradas & Download</h3>
+              <p>Baixe as imagens e vídeos gerados com o Flow AI diretamente para o seu computador.</p>
+            </div>
+            <div class="row" style="gap:8px;align-items:center;margin-top:6px">
+              <span class="chip" id="flowGalleryCount">0 arquivos</span>
+              <button type="button" class="btn ghost small" id="flowGalleryClearBtn"><i data-ic="trash"></i> Limpar galeria</button>
+            </div>
+          </div>
+
+          <div class="project-grid" id="flowGalleryGrid">
+            <div class="empty" style="grid-column:1/-1">Nenhuma mídia gerada ainda. Use o formulário acima para criar sua primeira imagem ou vídeo!</div>
+          </div>
+        </div>
+
+        <!-- Chat MCP do OpenCode para busca de imagens e vídeos -->
+        <div class="card" style="margin-top:14px">
+          <div class="card-title">
+            <div>
+              <h3><i data-ic="bot"></i> Assistente do Estúdio · Busca por Roteiro</h3>
+              <p>Converse para analisar roteiros, sugerir imagens e vídeos por cena, e adicionar diretamente aos seus projetos.</p>
+            </div>
+            <span class="pill ok" id="mcpChatStatus">● Assistente interno disponível</span>
+          </div>
+          <div class="stack">
+            <div class="field">
+              <span>Projeto para analisar</span>
+              <select id="mcpChatProjectSelect">
+                <option value="">Selecione um projeto</option>
+              </select>
+              <small class="hint">Escolha um projeto para o chat analisar o roteiro e sugerir mídias.</small>
+            </div>
+
+            <div class="card" style="margin-top:10px;padding:0;overflow:hidden">
+              <div id="mcpChatMessages" style="height:320px;overflow-y:auto;padding:14px 16px;background:rgba(5,9,19,.4);border:1px solid var(--line2);border-radius:12px;display:flex;flex-direction:column;gap:10px;font-size:13px;line-height:1.5">
+                <div style="color:var(--muted);font-size:12px">Olá! Sou o assistente interno do estúdio. Posso analisar roteiros, sugerir imagens e vídeos para cada cena, e ajudar você a montar seu projeto. Selecione um projeto acima ou me pergunte o que precisar.</div>
+              </div>
+              <div class="row" style="gap:8px;padding:12px 16px;border-top:1px solid var(--line2);background:rgba(10,18,34,.3)">
+                <input type="text" id="mcpChatInput" placeholder="Digite sua mensagem…" style="flex:1;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:rgba(19,29,52,.6);color:var(--text);font:inherit">
+                <button type="button" class="btn primary small" id="mcpChatSendBtn"><i data-ic="send"></i> Enviar</button>
+              </div>
+            </div>
+
+            <div class="grid2" style="margin-top:10px">
+              <div class="field">
+                <span>Ação rápida</span>
+                <div class="seg" id="mcpChatQuickSeg">
+                  <button type="button" class="on" data-mcpaction="suggest">Sugerir mídias por cena</button>
+                  <button type="button" data-mcpaction="image-prompt">Prompt de imagem</button>
+                  <button type="button" data-mcpaction="video-prompt">Prompt de vídeo</button>
+                </div>
+              </div>
+              <div class="field">
+                <span>Estilo</span>
+                <select id="mcpChatStyleSelect">
+                  <option value="cinematic">Cinematográfico</option>
+                  <option value="realistic">Realista</option>
+                  <option value="anime">Anime / 2D</option>
+                  <option value="minimal">Minimalista</option>
+                </select>
+              </div>
+            </div>
+            <div id="mcpChatResult" style="margin-top:10px;padding:12px;border:1px solid var(--line2);border-radius:10px;background:rgba(10,18,34,.3);display:none"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================ TRANSCRIÇÃO GROQ -->
+      <section id="viewGroq" class="view" hidden>
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">WHISPER NA GROQ · LEGENDAS EXATAS</div>
+            <h1>Transcrição Groq</h1>
+            <p>Transcreva a narração palavra por palavra e receba SRT, TXT e JSON sincronizados. Use o roteiro original para manter o texto exato e só corrigir os tempos.</p>
+          </div>
+          <div class="head-actions">
+            <span class="pill off" id="groqStatusPill">● Verificando…</span>
+            <button class="btn ghost" id="groqRefreshBtn"><i data-ic="refresh"></i> Atualizar</button>
+          </div>
+        </header>
+
+        <div class="grid2" style="align-items:start;margin-bottom:18px">
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="mic"></i> Enviar uma narração</h3>
+                <p>MP3, WAV, M4A, OGG, FLAC ou WebM. Áudios grandes são comprimidos e divididos automaticamente.</p>
+              </div>
+              <span class="chip" id="groqLimitChip">—</span>
+            </div>
+            <div class="stack">
+              <label class="drop" id="groqDrop"><span class="req">OBRIGATÓRIO</span><div class="ico"><i data-ic="upload"></i></div><strong>Arquivo de áudio</strong><small>Clique ou arraste a narração aqui</small><span class="picked" id="groqAudioName">Nenhum arquivo escolhido</span><input type="file" id="groqAudio" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.webm,.mov,audio/*"></label>
+
+              <div class="grid2">
+                <label class="field"><span>Modelo</span><select id="groqModel"></select></label>
+                <label class="field"><span>Idioma falado</span><select id="groqLanguage"></select></label>
+              </div>
+
+              <div class="field">
+                <span>Como montar as legendas</span>
+                <select id="groqMode"></select>
+                <small id="groqModeHint">Automático escolhe o melhor modo conforme o roteiro e o áudio.</small>
+              </div>
+
+              <details class="acc">
+                <summary><i data-ic="file"></i> Roteiro original (opcional)</summary>
+                <div>
+                  <label class="field"><span>Cole o roteiro narrado</span><textarea id="groqScriptText" rows="6" placeholder="Cole aqui o texto exato que foi narrado. Com ele, a legenda mantém as palavras do roteiro e o Groq só ajusta os tempos."></textarea></label>
+                  <label class="drop s" style="min-height:110px"><span class="req opt">OPCIONAL</span><div class="ico"><i data-ic="file"></i></div><strong>Ou envie TXT / MD / SRT</strong><small>Usado para alinhar o texto e corrigir a transcrição</small><span class="picked" id="groqScriptName">Nenhum arquivo escolhido</span><input type="file" id="groqScriptFile" accept=".txt,.md,.srt,text/plain"></label>
+                </div>
+              </details>
+
+              <button type="button" class="btn primary" id="groqSubmit"><i data-ic="spark"></i> Transcrever com Groq</button>
+
+              <div id="groqProgress" hidden>
+                <div class="spread tiny" style="margin-bottom:6px"><span id="groqProgressMsg">Preparando…</span><span id="groqProgressPct">0%</span></div>
+                <div class="track"><div id="groqProgressFill"></div></div>
+                <small class="hint" id="groqProgressStage"></small>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="spark"></i> Quando usar</h3>
+                <p>O Groq não é obrigatório: ele entra quando a legenda precisa casar com a voz.</p>
+              </div>
+            </div>
+            <div class="stack" id="groqGuidance">
+              <div class="note info"><b>Pode usar em todos os projetos.</b> O estúdio comprime e divide áudios acima do limite da API e reaproveita o resultado da mesma narração em cache.</div>
+            </div>
+            <div class="groq-facts" id="groqFacts"></div>
+          </div>
+        </div>
+
+        <div class="card groq-result-card" id="groqResultCard" hidden>
+          <div class="card-title">
+            <div><h3><i data-ic="check"></i> Transcrição pronta</h3><p id="groqResultMeta">—</p></div>
+            <span class="pill ok">● concluído</span>
+          </div>
+          <div class="groq-result-grid" id="groqResultActions"></div>
+          <pre class="groq-preview" id="groqPreview"></pre>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <div><h3><i data-ic="terminal"></i> Transcrições recentes</h3><p>As últimas tarefas ficam salvas no servidor para baixar de novo sem gastar cota.</p></div>
+            <span class="chip" id="groqJobsCount">0 tarefas</span>
+          </div>
+          <div class="groq-jobs" id="groqJobsList"><div class="empty">Nenhuma transcrição ainda. Envie uma narração acima.</div></div>
+        </div>
+      </section>
+
+      <!-- ============================================ FLOW BLOCOS (ANIMAÇÃO 2D) -->
+      <section id="viewFlowBlocks" class="view" hidden>
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">FLUXO DE CENAS · ANIMAÇÃO 2D</div>
+            <h1>Flow Blocos</h1>
+            <p>Cole o roteiro, a IA divide em blocos (cenas) e cria um prompt de imagem para cada um. Gere via Nano Banana e acompanhe a lista em ordem. Errou? Clique em Refazer naquele bloco sem perder as demais.</p>
+          </div>
+          <div class="head-actions">
+            <span class="pill off" id="flowBlocksApiPill">● Verificando…</span>
+            <button class="btn ghost" id="flowBlocksRefreshBtn"><i data-ic="refresh"></i> Atualizar</button>
+          </div>
+        </header>
+
+        <div class="grid2" style="align-items:start;margin-bottom:18px">
+          <!-- Roteiro e geração de blocos -->
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="file"></i> 1 · Roteiro → Blocos</h3>
+                <p>Cole o roteiro ou use o SRT do projeto. A IA divide em blocos de cena e sugere um prompt de imagem para cada um.</p>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="row" style="gap:12px;align-items:flex-end;margin-bottom:8px">
+                <label class="switch"><input type="checkbox" id="flowBlocksUseSrt"><span class="sw"></span><div><b>Usar SRT do projeto aberto</b><small>Gera blocos com os tempos da timeline do SRT (opcional)</small></div></label>
+                <span class="chip" id="flowBlocksProjetoChip" style="font-size:11px;padding:4px 8px">sem projeto aberto</span>
+              </div>
+              <label class="field"><span>Roteiro / narração</span><textarea id="flowBlocksScript" rows="8" placeholder="Cole aqui o roteiro completo da animação…"></textarea></label>
+              <div class="row" style="gap:8px">
+                <label class="field" style="flex:1"><span>Máximo de blocos</span><select id="flowBlocksMaxBlocks"><option value="10">10 blocos</option><option value="20" selected>20 blocos</option><option value="30">30 blocos</option></select></label>
+                <label class="field" style="flex:1"><span>Proporção</span><select id="flowBlocksRatio"><option value="16:9">16:9 · Horizontal</option><option value="9:16">9:16 · Vertical</option><option value="1:1">1:1 · Quadrado</option></select></label>
+              </div>
+              <label class="drop s" style="min-height:110px;margin-top:8px"><span class="req opt">OPCIONAL</span><div class="ico"><i data-ic="image"></i></div><strong>Imagem de referência</strong><small>Usada pelo Nano Banana como base para as gerações</small><span class="picked" id="flowBlocksRefName">Nenhuma imagem escolhida</span><input type="file" id="flowBlocksRefFile" accept=".png,.jpg,.jpeg,.webp,image/*"></label>
+              <button type="button" class="btn primary" id="flowBlocksGenBtn"><i data-ic="spark"></i> Dividir em blocos e gerar prompts</button>
+              <div id="flowBlocksProgress" hidden><div class="spread tiny" style="margin-bottom:6px"><span id="flowBlocksMsg">Processando roteiro…</span><span id="flowBlocksPct">0%</span></div><div class="track"><div id="flowBlocksFill"></div></div></div>
+            </div>
+          </div>
+
+          <!-- Lista de blocos -->
+          <div class="card">
+            <div class="card-title">
+              <div><h3><i data-ic="box"></i> 2 · Blocos e Imagens</h3><p>Cada bloco tem seu prompt. Clique em Gerar imagem para criar via Nano Banana. Use Refazer se alguma sair errada.</p></div>
+              <span class="chip" id="flowBlocksCount">0 blocos</span>
+            </div>
+            <div class="flow-blocks-list" id="flowBlocksList">
+              <div class="empty">Nenhum bloco ainda. Cole o roteiro acima e clique em "Dividir em blocos".</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Galeria rápida das imagens já geradas neste projeto -->
+        <div class="card" id="flowBlocksGalleryCard" hidden>
+          <div class="card-title">
+            <div><h3><i data-ic="image"></i> Imagens geradas</h3><p>Baixe ou reutilize as imagens já criadas para este roteiro.</p></div>
+          </div>
+          <div class="project-grid" id="flowBlocksGalleryGrid"></div>
+        </div>
+      </section>
+
+      <!-- ============================================ SKILLS DE ROTEIRO -->
+      <section id="viewSkills" class="view" hidden>
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">ROTEIROS (SKILLS)</div>
+            <h1>Roteiros de Vídeo</h1>
+            <p>Escolha um modelo de roteiro (skill) e gere o texto automaticamente. Cada skill tem seu próprio método de escrita e estrutura de cena.</p>
+          </div>
+          <div class="head-actions">
+            <span class="chip" id="skillsCount">0 skills</span>
+            <button class="btn ghost" id="skillsRefreshBtn"><i data-ic="refresh"></i> Atualizar</button>
+          </div>
+        </header>
+
+        <div class="grid2" style="align-items:start;margin-bottom:18px">
+          <!-- Lista de skills -->
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="file"></i> 1 · Escolher uma Skill</h3>
+                <p>Cada skill é um modelo de roteiro com regras próprias de escrita, estrutura de cena e tom de voz.</p>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="skills-list" id="skillsList">
+                <div class="empty">Carregando skills…</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Editor de roteiro -->
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="spark"></i> 2 · Gerar Roteiro</h3>
+                <p>Preencha o tópico e gere o roteiro usando o método da skill selecionada.</p>
+              </div>
+            </div>
+            <div class="stack">
+              <label class="field"><span>Tópico / Título do vídeo</span><input type="text" id="skillTopicInput" placeholder="Ex: Como funciona a fotossíntese"></label>
+              <label class="field"><span>Idioma</span><select id="skillLanguageSelect"><option value="pt-BR">Português</option><option value="en">Inglês</option><option value="es">Espanhol</option></select></label>
+              <label class="field"><span>Nº de caracteres (opcional)</span><input type="number" id="skillCharCountInput" placeholder="Ex: 800"></label>
+              <button type="button" class="btn primary" id="skillGenerateBtn"><i data-ic="spark"></i> Gerar Roteiro</button>
+              <div id="skillProgress" hidden style="margin-top:10px;border:1px solid var(--line2);border-radius:10px;background:rgba(10,18,34,.4);padding:12px">
+                <div class="spread tiny" style="margin-bottom:6px"><span id="skillMsg">Gerando…</span></div>
+                <div class="track"><div id="skillFill"></div></div>
+              </div>
+              <div id="skillResult" hidden style="margin-top:14px">
+                <div class="card-title">
+                  <div><h3><i data-ic="check"></i> Roteiro Gerado</h3><p id="skillResultMeta"></p></div>
+                </div>
+                <div class="stack">
+                  <label class="field"><span>Texto do roteiro</span><textarea id="skillResultText" rows="12" readonly></textarea></label>
+                  <div class="row" style="gap:8px">
+                    <button type="button" class="btn primary" id="skillUseBtn"><i data-ic="check"></i> Usar como roteiro</button>
+                    <button type="button" class="btn ghost" id="skillCopyBtn"><i data-ic="copy"></i> Copiar texto</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <div><h3><i data-ic="terminal"></i> Como usar as Skills</h3></div>
+          </div>
+          <div class="note info">
+            <b>Fluxo:</b> 1) Escolha uma skill na lista · 2) Digite o tópico · 3) Clique em "Gerar Roteiro" · 4) O texto aparece abaixo · 5) Clique em "Usar como roteiro" para anexar o texto na aba Arquivos de "Novo vídeo".
+          </div>
+          <div class="note warn">
+            <b>Importante:</b> Cada skill segue seu próprio método de escrita. O conteúdo completo da skill selecionada é enviado ao modelo para gerar o roteiro, então escolha a skill que combina com o tipo de vídeo.
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================ ESTILOS DE VÍDEO (SKILLS) -->
+      <section id="viewSkillsVideo" class="view" hidden>
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">ESTILOS DE VÍDEO (SKILLS)</div>
+            <h1>Estilos de Vídeo</h1>
+            <p>Escolha um estilo baseado nas Skills da Biblioteca. Cada estilo define cor, movimento, transição e efeitos aplicados às suas cenas.</p>
+          </div>
+          <div class="head-actions">
+            <span class="chip" id="skillsVideoCount">0 estilos</span>
+            <button class="btn ghost" id="skillsVideoRefreshBtn"><i data-ic="refresh"></i> Atualizar</button>
+          </div>
+        </header>
+
+        <div class="grid2" style="align-items:start;margin-bottom:18px">
+          <!-- Lista de styles -->
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="box"></i> Estilos Disponíveis</h3>
+                <p>Clique em um estilo para selecionar. A prévia atualiza automaticamente à direita.</p>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="skills-video-list" id="skillsVideoList">
+                <div class="empty">Carregando estilos…</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Preview do estilo selecionado -->
+          <div class="card">
+            <div class="card-title">
+              <div>
+                <h3><i data-ic="spark"></i> Prévia do Estilo</h3>
+                <p>Visualize como o estilo será aplicado nas cenas do seu vídeo.</p>
+              </div>
+            </div>
+            <div class="stack">
+              <div id="skillsVideoSelected" style="padding:16px;border:2px solid var(--line2);border-radius:12px;background:#0b1224;text-align:center;">
+                <p class="tiny" id="skillsVideoSelectedLabel" style="color:var(--dim);margin-bottom:12px">Nenhum estilo selecionado</p>
+                <div id="skillsVideoPreviewBox" style="margin:12px 0;border:1px solid var(--line);border-radius:10px;background:#0a1020;width:100%;height:220px;display:flex;align-items:center;justify-content:center;color:var(--dim)">
+                  Selecione um estilo para ver a prévia
+                </div>
+                <div class="spread" style="gap:8px;margin-top:10px;justify-content:center">
+                  <span class="chip" id="skillsVideoColorChip" style="background:#6366F1"></span>
+                  <span class="chip" id="skillsVideoMotionChip" style="background:var(--panel3);color:var(--dim)"></span>
+                  <span class="chip" id="skillsVideoTransitionChip" style="background:var(--panel3);color:var(--dim)"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <div><h3><i data-ic="scissors"></i> Aplicar o Estilo</h3></div>
+          </div>
+          <div class="note info">
+            <b>Como usar:</b> Selecione um estilo na lista à esquerda e escolha o destino abaixo. Com um projeto selecionado, cor, movimento, transição e efeitos são aplicados direto nas configurações dele. Sem projeto selecionado, o estilo é salvo como padrão do estúdio e usado nos próximos projetos.
+          </div>
+          <label class="field" style="max-width:520px;margin-bottom:12px"><span>Destino do estilo</span><select id="skillsVideoProjectSelect"><option value="">Salvar como estilo padrão do estúdio</option></select><small>Escolha um projeto para aplicar somente nele, ou deixe em branco para valer em todos os próximos.</small></label>
+          <div class="row" style="gap:8px;align-items:center;margin-top:8px">
+            <button type="button" class="btn primary" id="skillsVideoApplyBtn" disabled>
+              <i data-ic="check"></i> Aplicar Estilo Selecionado
+            </button>
+          </div>
+          <div id="skillsVideoResult" style="margin-top:12px;padding:12px;border:1px solid var(--line2);border-radius:8px;background:#0a1020;color:var(--muted);font-size:12px;"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <div><h3><i data-ic="play"></i> Renderizar Cena com Remotion</h3></div>
+          </div>
+          <div class="note info">
+            <b>Gera um vídeo animado</b> com o estilo selecionado usando Remotion (motion graphics). Útil para criar cenas de introdução, transições ou b-roll animado.
+          </div>
+          <label class="field" style="max-width:520px;margin-bottom:8px"><span>Texto da cena</span><input type="text" id="motionSceneText" placeholder="Ex: Financiamento de carro" value="Financiamento de carro: será que vale a pena?"></label>
+          <label class="field" style="max-width:520px;margin-bottom:12px"><span>Duração (segundos)</span><input type="number" id="motionSceneDuration" min="1" max="30" value="5"></label>
+          <div class="row" style="gap:8px;align-items:center;margin-top:8px">
+            <button type="button" class="btn primary" id="motionRenderBtn" disabled>
+              <i data-ic="spark"></i> Renderizar Cena Remotion
+            </button>
+          </div>
+          <div id="motionRenderResult" style="margin-top:12px;padding:12px;border:1px solid var(--line2);border-radius:8px;background:#0a1020;color:var(--muted);font-size:12px;"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <div><h3><i data-ic="terminal"></i> Guia Rápido</h3></div>
+          </div>
+          <div class="note info">
+            <b>O que cada estilo controla:</b><br>
+            • <b>Cor primária:</b> cor de destaque da CTA e das etiquetas desenhadas nas cenas<br>
+            • <b>Paleta:</b> cor secundária, guardada como referência visual do projeto<br>
+            • <b>Movimento:</b> Ken Burns nas fotos (zoom, pan, drift)<br>
+            • <b>Transição:</b> efeito entre cenas (fade, slide, wipe)<br>
+            • <b>Efeitos:</b> chroma, glitch, scanlines, shake, flicker, sharpen, soft, pixel
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================ CHAVES DE API -->
+      <section id="viewKeys" class="view" hidden>
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">CONFIGURAÇÕES DO ESTÚDIO</div>
+            <h1>Chaves de API & Conexões</h1>
+            <p>Gerencie e teste as credenciais dos bancos de mídia (Pixabay, Pexels, Unsplash, Coverr, Storyblocks), YouTube, Fish Audio e Google Flow diretamente no app.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn ghost" id="testAllKeysBtn"><i data-ic="spark"></i> Testar todas as chaves</button>
+            <button class="btn primary" id="saveAllKeysBtn"><i data-ic="check"></i> Salvar alterações</button>
+          </div>
+        </header>
+
+        <div class="note info" style="margin-bottom:18px">
+          <b>Segurança e persistência:</b> As chaves são salvas no arquivo <code>.env</code> local do projeto e carregadas em tempo de execução. Chaves de exemplo como <code>sua_chave_...</code> são identificadas e não causam erros de autenticação nas buscas.
+        </div>
+
+        <div class="project-grid" id="keysCardsGrid" style="grid-template-columns:repeat(auto-fill,minmax(330px,1fr))"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- editor de estilo/áudio de um projeto existente -->
+  <div class="editor" id="editor" hidden>
+    <div class="editor-box">
+      <div class="editor-head"><div><div class="eyebrow">AJUSTES DO PROJETO</div><h2>Estilo, áudio e formato</h2></div><button class="icon-btn" id="closeEditor"><i data-ic="x"></i></button></div>
+      <div class="tabs" id="editorTabs"></div>
+      <div class="pane" id="editorPane"></div>
+      <div class="editor-foot"><span class="tiny">As mudanças valem para a próxima montagem.</span><button class="btn primary" id="saveEditor"><i data-ic="check"></i> Salvar ajustes</button></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="login" id="loginOverlay" hidden><form id="loginForm" class="login-card"><div class="brand-mark big"><span></span><span></span><span></span></div><div class="eyebrow">ÁREA PROTEGIDA</div><h2>Bem-vindo de volta</h2><p>Digite a senha de acesso definida no arquivo <code>.env</code> do servidor.</p><input type="password" id="loginPassword" placeholder="Senha de acesso" autocomplete="current-password" required /><button class="btn primary" type="submit">Entrar no estúdio</button><div class="form-error" id="loginError" hidden></div></form></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

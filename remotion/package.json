@@ -1,0 +1,23 @@
+{
+  "name": "faceless-remotion",
+  "version": "1.0.0",
+  "description": "Remotion compositions for Faceless Cloud Studio",
+  "private": true,
+  "scripts": {
+    "build": "remotion bundle ./src/index.ts ./build/bundle.zip",
+    "render": "remotion render ./src/index.ts FacelessScene ./out/video.mp4 --codec=h264 --fps=24 --props-file=./props.json",
+    "render-video": "remotion render ./src/index.ts FacelessScene ./out/video.mp4 --codec=h264 --fps=24"
+  },
+  "dependencies": {
+    "@remotion/renderer": "^4.0.541",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "^4.0.541",
+    "@remotion/web-renderer": "^4.0.541",
+    "@types/react": "^18.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.0.0"
+  }
+}
