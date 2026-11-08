@@ -20,7 +20,9 @@ RENDER_SCRIPT = REMOTION_DIR / "render.js"
 
 
 def _cache_key(props: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(props, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+    # Invalida os MP4 antigos que eram apenas fundos sólidos gerados pelo fallback FFmpeg.
+    versioned = {"renderer": "remotion-real-v2", **props}
+    return hashlib.sha256(json.dumps(versioned, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
 def render_scene(
