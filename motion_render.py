@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -43,8 +44,7 @@ def render_scene(
     out_path = MOTION_DIR / f"{chave}.mp4"
     meta_path = MOTION_DIR / f"{chave}.json"
 
-    if out_path.exists():
-        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    if out_path.exists() and out_path.stat().st_size > 0:
         return {
             "url": f"/api/motion/{chave}.mp4",
             "path": str(out_path),
@@ -52,13 +52,20 @@ def render_scene(
             "duration_s": duration,
         }
 
-    # Grava props em JSON temporário para o Node.js ler
+    # O renderizador precisa das dependências locais do projeto Remotion.
+    node_bin = shutil.which("node")
+    if not node_bin:
+        raise RuntimeError("Node.js não encontrado. Instale Node.js 20 LTS e reinicie o aplicativo.")
+    if not (REMOTION_DIR / "node_modules" / "@remotion" / "renderer").exists():
+        raise RuntimeError("Remotion ainda não foi instalado. Execute INSTALAR_REMOTION_WINDOWS.bat na pasta do projeto.")
+
+    # Grava props em JSON temporário para o Node.js ler.
     props_file = MOTION_DIR / f"{chave}.props.json"
     with lock:
         props_file.write_text(json.dumps(props, ensure_ascii=False), encoding="utf-8")
 
     try:
-        node_cmd = ["node", str(RENDER_SCRIPT), str(props_file), str(out_path), ffmpeg_path()]
+        node_cmd = [node_bin, str(RENDER_SCRIPT), str(props_file), str(out_path), ffmpeg_path()]
         result = subprocess.run(
             node_cmd,
             capture_output=True,
@@ -94,9 +101,10 @@ def render_scene(
         if not render_result.get("ok") and not out_path.exists():
             raise RuntimeError(f"Remotion não gerou saída: {(result.stdout + result.stderr)[:500]}")
 
-        # Se o arquivo existe, considera sucesso independente do returncode
-        if not out_path.exists():
-            raise RuntimeError(f"Arquivo de saída não foi gerado: {(result.stdout + result.stderr)[:500]}")
+        if result.returncode != 0:
+            raise RuntimeError(f"Remotion encerrou com código {result.returncode}: {(result.stdout + result.stderr)[-1800:]}")
+        if not out_path.is_file() or out_path.stat().st_size == 0:
+            raise RuntimeError(f"Remotion não criou um MP4 válido: {(result.stdout + result.stderr)[-1800:]}")
 
         meta = {
             "tipo_cena": "faceless_scene",
@@ -118,6 +126,9 @@ def render_scene(
             "duration_s": duration,
         }
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Remotion render excedeu o tempo limite (180s).")
+        raise RuntimeError("Render Remotion excedeu o tempo limite (180s).")
     except Exception as exc:
+        out_path.unlink(missing_ok=True)
         raise RuntimeError(f"Erro ao renderizar cena Remotion: {exc}")
+    finally:
+        props_file.unlink(missing_ok=True)
