@@ -37,7 +37,7 @@ async function main() {
     entryPoint,
     onProgress: (progress) => {
       if (process.env.REMOTION_VERBOSE === "1") {
-        process.stderr.write(`Bundle Remotion: ${Math.round(progress * 100)}%\\n`);
+        process.stderr.write(`Bundle Remotion: ${Math.round(progress * 100)}%\n`);
       }
     },
   });
@@ -77,13 +77,13 @@ async function main() {
     width,
     height,
     bytes: stat.size,
-  }) + "\\n");
+  }) + "\n");
 }
 
 main().catch((error) => {
   process.stderr.write(JSON.stringify({
     ok: false,
     error: error && error.stack ? error.stack : String(error),
-  }) + "\\n");
+  }) + "\n");
   process.exitCode = 1;
 });
