@@ -97,66 +97,148 @@ def parse_srt_to_cenas(srt_text: str) -> list[dict[str, Any]]:
     return cenas
 
 
-def gerar_consultas_para_cena(texto: str, idioma: str = "auto", max_consultas: int = 4) -> dict[str, Any]:
-    """Usa LLM para gerar 2–4 consultas de busca curtas + descrição visual de uma cena."""
+def _parse_json_plan(raw: str) -> dict[str, Any] | None:
+    """Extrai um objeto JSON do texto devolvido por um provedor LLM."""
+    raw = (raw or "").strip()
+    first, last = raw.find("{"), raw.rfind("}")
+    if first < 0 or last <= first:
+        return None
+    try:
+        value = json.loads(raw[first:last + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    queries = value.get("consultas") or value.get("queries") or []
+    if isinstance(queries, str):
+        queries = [queries]
+    queries = [" ".join(str(q).split())[:100] for q in queries if str(q).strip()]
+    keywords = value.get("palavras_chave") or value.get("keywords") or []
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    try:
+        motion = max(0, min(100, int(value.get("motion_score", value.get("pontuacao_movimento", 50)))))
+    except (TypeError, ValueError):
+        motion = 50
+    media = str(value.get("recommended_media") or value.get("tipo_midia") or "video").lower()
+    media = "image" if media in ("image", "imagem", "foto", "photo") else "video"
+    return {
+        "palavras_chave": [str(x)[:50] for x in keywords[:6]],
+        "consultas": queries[:4],
+        "descricao_visual": str(value.get("descricao_visual") or value.get("visual_description") or "")[:400],
+        "motion_score": motion,
+        "recommended_media": media,
+    }
+
+
+def _openrouter_plan(prompt: str, model: str | None = None) -> dict[str, Any] | None:
+    key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if not key:
+        return None
+    selected_model = (model or os.getenv("OPENROUTER_MODEL") or "google/gemini-2.5-flash").strip()
+    if not selected_model:
+        selected_model = "google/gemini-2.5-flash"
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:3000",
+            "X-OpenRouter-Title": "Faceless Studio",
+        },
+        json={
+            "model": selected_model,
+            "messages": [
+                {"role": "system", "content": "Responda somente com JSON válido. Não invente fatos sobre a cena."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.25,
+            "max_tokens": 500,
+        },
+        timeout=(15, 45),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    content = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+    if isinstance(content, list):
+        content = " ".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    return _parse_json_plan(str(content))
+
+
+def gerar_consultas_para_cena(
+    texto: str,
+    idioma: str = "auto",
+    max_consultas: int = 4,
+    contexto: str = "",
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Gera consultas, descrição e nota de movimento. Prioriza OpenRouter; usa Gemini e texto como fallback."""
     if idioma == "auto":
         idioma = _detect_lang(texto)
 
     lang_instrucao = {
-        "pt": "Escreva as consultas em português e em inglês.",
-        "en": "Write the queries in English only.",
-    }.get(idioma, "Escreva as consultas em português e em inglês.")
+        "pt": "Escreva consultas em português e também em inglês para os bancos stock.",
+        "en": "Write the search queries in English only.",
+    }.get(idioma, "Escreva consultas em português e também em inglês.")
 
+    contexto_curto = " ".join(str(contexto or "").split())[:2600]
     instrucao = (
-        "Você é um roteirista de documentário de canal dark/animação 2D. "
-        "Leia este trecho de narração com timestamp e devolva APENAS um JSON válido com:\n"
-        "- palavras_chave: até 6 palavras-chave do trecho\n"
-        "- consultas: lista de 2 a 4 consultas de busca curtas (máximo 6 palavras cada) para encontrar imagens/vídeos de banco "
-        "ou gerar com IA. Use termos visuais concretos.\n"
-        "- descricao_visual: uma frase descrevendo o que deve aparecer na imagem/vídeo desta cena\n"
+        "Você é diretor de fotografia e pesquisador visual de vídeos documentais faceless. "
+        "Entenda o trecho isoladamente e também o contexto do roteiro. Crie termos que encontrem imagens "
+        "ou vídeos realmente relacionados à ideia, não apenas palavras soltas do texto. "
+        "Devolva APENAS um JSON válido com os campos: "
+        "palavras_chave (até 6 itens), consultas (2 a 4 buscas curtas, até 6 palavras cada, com sujeitos/ações/lugares visíveis), "
+        "descricao_visual (uma frase concreta), motion_score (inteiro de 0 a 100; alto quando a cena depende de movimento real), "
+        "recommended_media (video ou image). "
+        "Escolha vídeo para ação, deslocamento, processos em andamento e movimento; escolha imagem para conceitos, retratos, "
+        "objetos, mapas, números, lugares estáticos e cenas simbólicas. Não escolha vídeo apenas para preencher. "
         f"{lang_instrucao}\n\n"
-        f'Trecho: "{texto}"\n\n'
-        'Exemplo de saída:\n'
-        '{"palavras_chave": ["buraco negro", "espaço", "escuridão"], '
-        '"consultas": ["black hole space", "buraco negro universo", "cosmic darkness"], '
-        '"descricao_visual": "Um buraco negro no centro de uma galáxia escura com disco de acreção brilhando"}'
+        f"CONTEXTO DO ROTEIRO: {contexto_curto or 'Não fornecido'}\n\n"
+        f"TRECHO ATUAL: {str(texto)[:1200]}\n\n"
+        'Formato: {"palavras_chave":["..."],"consultas":["...","..."],"descricao_visual":"...","motion_score":65,"recommended_media":"video"}'
     )
 
-    chave = _gemini_key()
-    if not chave:
-        # Fallback sem LLM: usa o texto como consulta
-        return {
-            "palavras_chave": texto.split()[:6],
-            "consultas": [texto[:60]],
-            "descricao_visual": texto[:120],
-        }
-
-    corpo = {
-        "contents": [{"parts": [{"text": instrucao}]}],
-        "generationConfig": {"temperature": 0.4},
-    }
+    # Primeiro tenta OpenRouter. Erros de rede, crédito ou modelo não interrompem o projeto.
     try:
-        resp = requests.post(f"{API}/models/{IMAGE_MODEL}:generateContent", headers=_headers(), json=corpo, timeout=(20, 60))
-        if resp.ok:
-            dados = resp.json()
-            partes = ((dados.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
-            texto_saida = ""
-            for parte in partes:
-                if parte.get("text"):
-                    texto_saida = parte["text"].strip()
-                    break
-            # Tenta extrair JSON
-            inicio = texto_saida.find("{")
-            fim = texto_saida.rfind("}")
-            if inicio != -1 and fim != -1:
-                bloco = texto_saida[inicio:fim + 1]
-                return json.loads(bloco)
+        plan = _openrouter_plan(instrucao, model=model)
+        if plan and plan.get("consultas"):
+            plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
+            plan["provider"] = "openrouter"
+            return plan
     except Exception:
         pass
+
+    # Fallback: Gemini, mantendo o mesmo formato editorial.
+    chave = _gemini_key()
+    if chave:
+        corpo = {
+            "contents": [{"parts": [{"text": instrucao}]}],
+            "generationConfig": {"temperature": 0.35},
+        }
+        try:
+            resp = requests.post(
+                f"{API}/models/{IMAGE_MODEL}:generateContent",
+                headers=_headers(), json=corpo, timeout=(20, 60),
+            )
+            if resp.ok:
+                dados = resp.json()
+                partes = ((dados.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+                texto_saida = next((parte.get("text", "") for parte in partes if parte.get("text")), "")
+                plan = _parse_json_plan(texto_saida)
+                if plan and plan.get("consultas"):
+                    plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
+                    plan["provider"] = "gemini"
+                    return plan
+        except Exception:
+            pass
+
     return {
-        "palavras_chave": texto.split()[:6],
-        "consultas": [texto[:60]],
-        "descricao_visual": texto[:120],
+        "palavras_chave": re.findall(r"[A-Za-zÀ-ÿ0-9]+", texto)[:6],
+        "consultas": [str(texto)[:80]],
+        "descricao_visual": str(texto)[:160],
+        "motion_score": 50,
+        "recommended_media": "video",
+        "provider": "fallback",
     }
 
 
