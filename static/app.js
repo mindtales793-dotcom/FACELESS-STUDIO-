@@ -1980,7 +1980,7 @@ function sceneHtml(s, i, p) {
   <div class="q-row"><input type="text" data-q value="${esc(s.query || '')}" maxlength="160" title="Termos de busca"><button type="button" class="mini" data-act2="research" title="Buscar de novo">${ic('search')}</button></div>
   ${opts.length ? `<div class="opt-strip">${strip}</div>${line}${matchInfo}` : `<div class="scene-empty">Nenhuma mídia compatível foi encontrada. Mude a busca, escolha outras fontes ou envie um arquivo.${esc(rejectedInfo)}</div>`}
   ${searchUsageInfo}
-  ${(s.search_notes || []).length ? `<small class="hint">${esc(s.search_notes.join(' · '))}</small>`
+  ${(s.search_notes || []).length ? `<small class="hint">${esc(s.search_notes.join(' · '))}</small>` : ''}
   <div class="scene-actions"><label class="btn ghost upl">${ic('upload')} Meu arquivo<input type="file" data-upload accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.m4v"></label>${flowOk ? `<button type="button" class="btn ghost" data-act2="gen">${ic('spark')} Gerar com IA</button>` : ''}<button type="button" class="btn ghost" data-act2="yt">${ic('film')} YouTube</button></div>
   ${ytBox}${genBox}${genMsg}</div></article>`;
 }
