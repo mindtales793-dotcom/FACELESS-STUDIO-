@@ -18,7 +18,8 @@ import youtube_mgr
 
 # Catálogo mostrado na interface. A chave "env" indica qual Secret ativa a fonte.
 SOURCES: list[dict[str, Any]] = [
-    {"id": "youtube_video", "provider": "YouTube", "kind": "video", "env": None, "blurb": "Vídeos do YouTube (busca e download com yt-dlp)", "link": "https://www.youtube.com"},
+    {"id": "youtube_video", "provider": "YouTube", "kind": "video", "env": None, "blurb": "Vídeos do YouTube (confira os direitos de uso antes de publicar)", "link": "https://www.youtube.com"},
+    {"id": "youtube_frame", "provider": "YouTube · miniatura", "kind": "image", "env": None, "blurb": "Usa apenas a miniatura pública como imagem. Desmarcado por padrão; confirme os direitos antes de reutilizar.", "link": "https://www.youtube.com"},
     {"id": "storyblocks_video", "provider": "Storyblocks", "kind": "video", "env": "STORYBLOCKS_API_KEY", "blurb": "Vídeos cinematográficos do Storyblocks", "link": "https://www.storyblocks.com"},
     {"id": "storyblocks_image", "provider": "Storyblocks", "kind": "image", "env": "STORYBLOCKS_API_KEY", "blurb": "Imagens e ilustrações do Storyblocks", "link": "https://www.storyblocks.com"},
     {"id": "pexels_video", "provider": "Pexels", "kind": "video", "env": "PEXELS_API_KEY", "blurb": "Vídeos stock em boa qualidade", "link": "https://www.pexels.com/api/"},
@@ -38,6 +39,8 @@ def public_sources() -> list[dict[str, Any]]:
     out = []
     for s in SOURCES:
         ready = True if not s["env"] else is_active_key(os.getenv(s["env"], ""))
+        if s["provider"] == "Storyblocks":
+            ready = ready and is_active_key(os.getenv("STORYBLOCKS_API_SECRET", ""))
         out.append({**s, "ready": ready, "needs_key": bool(s["env"])})
     return out
 
@@ -64,7 +67,7 @@ def _asset_option(*, provider: str, media_type: str, asset_id: Any, download_url
         "license": license_name, "width": width, "height": height,
         "duration": duration, "download_location": download_location,
     }
-    for key in ("title", "tags", "description", "downloads", "likes", "views", "relevance"):
+    for key in ("title", "tags", "description", "downloads", "likes", "views", "relevance", "preview_only", "requires_permission"):
         if extra.get(key) not in (None, "", []):
             option[key] = extra[key]
     return option
@@ -430,14 +433,39 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
     def run_source(source: str, q: str) -> None:
         nonlocal messages
         try:
-            if source == "youtube_video":
+            if source in ("youtube_video", "youtube_frame"):
                 from scenes import make_youtube_query
                 yt_query = make_youtube_query(q)
-                options.extend(youtube_mgr.youtube_search(yt_query, per=per, orientation=orientation))
+                found = youtube_mgr.youtube_search(yt_query, per=per, orientation=orientation)
+                if source == "youtube_video":
+                    options.extend(found)
+                else:
+                    # Apenas miniaturas públicas. Não baixa o vídeo nem presume licença de reutilização.
+                    for item in found:
+                        thumb = item.get("thumbnail")
+                        if not thumb:
+                            continue
+                        options.append({
+                            **item,
+                            "id": f"{item.get('id', 'yt')}_thumbnail",
+                            "provider": "YouTube · miniatura",
+                            "media_type": "image",
+                            "download_url": thumb,
+                            "thumbnail": thumb,
+                            "duration": None,
+                            "license": "Miniatura do YouTube · confirme a autorização antes de reutilizar",
+                            "requires_permission": True,
+                        })
             elif source == "storyblocks_video":
-                options.extend(storyblocks_mgr.storyblocks_search(q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "video", per, orientation))
+                options.extend(storyblocks_mgr.storyblocks_search(
+                    q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "video", per, orientation,
+                    project_id=project_id or "faceless-auto-project",
+                ))
             elif source == "storyblocks_image":
-                options.extend(storyblocks_mgr.storyblocks_search(q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "image", per, orientation))
+                options.extend(storyblocks_mgr.storyblocks_search(
+                    q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "image", per, orientation,
+                    project_id=project_id or "faceless-auto-project",
+                ))
             elif source == "pexels_video":
                 options.extend(pexels_search(q, provider_key("PEXELS_API_KEY", "Pexels"), "video", per, orientation))
             elif source == "pexels_image":
