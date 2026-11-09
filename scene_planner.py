@@ -185,8 +185,11 @@ def gerar_consultas_para_cena(
     contexto_curto = " ".join(str(contexto or "").split())[:2600]
     instrucao = (
         "Você é diretor de fotografia e pesquisador visual de vídeos documentais faceless. "
-        "Entenda o trecho isoladamente e também o contexto do roteiro. Crie termos que encontrem imagens "
-        "ou vídeos realmente relacionados à ideia, não apenas palavras soltas do texto. "
+        "Interprete o significado exato da fala atual, usando os blocos vizinhos somente para resolver pronomes e contexto. "
+        "Identifique o assunto principal, a ação que está sendo narrada e o que precisa aparecer visualmente. "
+        "A cena deve ilustrar a afirmação atual, não apenas o tema amplo do vídeo nem uma palavra isolada. "
+        "Evite resultados genéricos: se a fala descreve alguém comprando um carro usado à vista, não busque apenas luxo, "
+        "dinheiro ou carros esportivos; procure a situação concreta descrita. "
         "Devolva APENAS um JSON válido com os campos: "
         "palavras_chave (até 6 itens), consultas (2 a 4 buscas curtas, até 6 palavras cada, com sujeitos/ações/lugares visíveis), "
         "descricao_visual (uma frase concreta), motion_score (inteiro de 0 a 100; alto quando a cena depende de movimento real), "
