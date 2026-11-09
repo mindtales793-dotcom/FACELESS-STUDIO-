@@ -320,10 +320,12 @@ def test_normalize_settings_limita_percentual_e_duracao_de_clipes():
     assert cfg["video_percent"] == 100
     assert cfg["max_video_seconds"] == 10
     assert cfg["openrouter_model"] == "google/gemini-2.5-flash"
+    assert cfg["max_search_requests"] == 24
 
-    cfg = main.normalize_settings({"video_percent": -5, "max_video_seconds": 0})
+    cfg = main.normalize_settings({"video_percent": -5, "max_video_seconds": 0, "max_search_requests": 0})
     assert cfg["video_percent"] == 0
     assert cfg["max_video_seconds"] == 1
+    assert cfg["max_search_requests"] == 1
 
 
 def test_auto_pick_respeita_cota_video_e_prioriza_nota_de_movimento():
@@ -544,3 +546,60 @@ def test_openrouter_visual_sem_chave_nao_quebra_busca(monkeypatch):
     assert kept == candidates
     assert report["status"] == "unavailable"
     assert report["accepted"] == 1
+
+
+def test_limite_global_de_consultas_por_cena(monkeypatch):
+    import providers
+
+    chamadas = []
+
+    def fake_search(query, api_key, media_type, per, orientation):
+        chamadas.append((query, media_type))
+        return []
+
+    monkeypatch.setattr(providers, "provider_key", lambda *args: "key")
+    monkeypatch.setattr(providers, "pexels_search", fake_search)
+    usage = {}
+    options, messages = providers.search_scene_assets(
+        "consulta principal",
+        ["pexels_video", "pexels_image"],
+        {},
+        per=2,
+        queries=["consulta dois", "consulta três"],
+        max_requests=3,
+        usage=usage,
+    )
+
+    assert chamadas == [
+        ("consulta principal", "video"),
+        ("consulta principal", "image"),
+        ("consulta dois", "video"),
+    ]
+    assert options == []
+    assert usage["requests"] == 3
+    assert usage["limit"] == 3
+    assert usage["remaining"] == 0
+    assert usage["limit_reached"] is True
+    assert usage["requests_by_source"] == {"pexels_video": 2, "pexels_image": 1}
+
+
+def test_limite_de_consultas_nao_ultrapassa_teto_absoluto(monkeypatch):
+    import providers
+
+    chamadas = []
+    monkeypatch.setattr(providers, "provider_key", lambda *args: "key")
+    monkeypatch.setattr(
+        providers, "pexels_search",
+        lambda query, api_key, media_type, per, orientation: chamadas.append(query) or [],
+    )
+    usage = {}
+    providers.search_scene_assets(
+        "principal",
+        ["pexels_video"],
+        {},
+        queries=[f"consulta {n}" for n in range(2, 20)],
+        max_requests=999,
+        usage=usage,
+    )
+    assert usage["limit"] == 24
+    assert usage["requests"] <= 24
