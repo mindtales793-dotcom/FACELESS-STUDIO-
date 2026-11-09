@@ -1444,9 +1444,9 @@ function renderKeysGrid() {
       </div>
 
       <div class="row" style="margin-top:6px">
-        <button type="button" class="btn ghost small test-key-btn" data-key-id="${esc(k.id)}">
+        ${k.kind === 'secret' ? '' : `<button type="button" class="btn ghost small test-key-btn" data-key-id="${esc(k.id)}">
           ${ic('spark')} Testar chave
-        </button>
+        </button>`}
         <button type="button" class="btn small save-single-key-btn" data-key-id="${esc(k.id)}" data-key-env="${esc(k.env)}">
           ${ic('check')} Salvar
         </button>
@@ -2340,7 +2340,7 @@ $('#saveAllKeysBtn')?.addEventListener('click', () => {
 });
 
 $('#testAllKeysBtn')?.addEventListener('click', async () => {
-  const btns = $$('#keysCardsGrid .test-key-btn');
+  const btns = $('#keysCardsGrid .test-key-btn').filter(btn => btn.dataset.keyId !== 'storyblocks_secret');
   for (const btn of btns) {
     await testSingleKey(btn.dataset.keyId, btn);
   }
