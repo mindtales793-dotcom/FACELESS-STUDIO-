@@ -1731,8 +1731,22 @@ def preview_narration_block(job_id: str, block_index: int):
     return FileResponse(chunk_file, media_type="audio/mpeg", filename=f"bloco_{block_index:03d}.mp3")
 
 
+@app.get("/api/narrations/{job_id}/audio")
+def stream_narration_audio(job_id: str):
+    """Serve o MP3 em linha para o player HTML5 do navegador."""
+    file_path = nar.get_audio_file(job_id)
+    return FileResponse(
+        file_path,
+        media_type="audio/mpeg",
+        filename="narracao_fish_audio.mp3",
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/narrations/{job_id}/download")
 def download_narration(job_id: str):
+    """Entrega o mesmo MP3 como download explícito."""
     file_path = nar.get_audio_file(job_id)
     return FileResponse(file_path, media_type="audio/mpeg", filename="narracao_fish_audio.mp3")
 
