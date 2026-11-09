@@ -102,6 +102,8 @@ def normalize_settings(raw: dict[str, Any] | None, base: dict[str, Any] | None =
     out["max_video_seconds"] = int(_num(raw.get("max_video_seconds", cur.get("max_video_seconds", 10)), 1, 10, 10))
     out["openrouter_model"] = " ".join(str(raw.get("openrouter_model", cur.get("openrouter_model", os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")))).split())[:120]
     out["per_source"] = int(_num(raw.get("per_source", cur.get("per_source", 3)), 1, 8, 3))
+    # Limite global de consultas aos bancos por cena (cada fonte x consulta conta como uma).
+    out["max_search_requests"] = int(_num(raw.get("max_search_requests", cur.get("max_search_requests", 12)), 1, 24, 12))
     out["pacing"] = raw.get("pacing", cur.get("pacing", "balanced"))
     if out["pacing"] not in styles.PACING:
         out["pacing"] = "balanced"
@@ -236,12 +238,21 @@ def analyze_project(pid: str) -> None:
         for idx, scene in enumerate(scenes):
             T.check()
             keep = [o for o in scene.get("options", []) if o.get("local_file")]
+            search_usage: dict[str, Any] = {}
             options, messages = providers.search_scene_assets(
                 scene["query"], settings["sources"], counts,
                 per=settings["per_source"], orientation=orientation,
                 pref=settings["media_pref"], project_id=pid,
                 queries=scene.get("search_queries"), smart=True,
+                max_requests=settings.get("max_search_requests", 12), usage=search_usage,
             )
+            scene["search_usage"] = search_usage
+            if search_usage.get("limit_reached"):
+                T.log(
+                    f"Limite de buscas da cena {idx + 1} atingido: {search_usage.get('requests')}/"
+                    f"{search_usage.get('limit')} consultas aos bancos.",
+                    "warn", stage="search",
+                )
             local_context = _scene_search_context(scenes, idx, script_context)
             options, media_report = _verify_scene_options(scene, options, settings, local_context)
             if media_report.get("status") == "verified":
@@ -265,7 +276,7 @@ def analyze_project(pid: str) -> None:
 
             plan_data = {
                 key: scene.get(key) for key in
-                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider", "media_verification", "rejected_media_count")
+                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider", "media_verification", "rejected_media_count", "search_usage")
                 if key in scene
             }
 
@@ -330,11 +341,13 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
         total_found = 0
         for idx, scene in enumerate(scenes):
             T.check()
+            search_usage: dict[str, Any] = {}
             options, messages = providers.search_scene_assets(
                 scene["query"], settings["sources"], counts,
                 per=settings["per_source"], orientation=orientation,
                 pref=settings["media_pref"], project_id=pid,
                 queries=scene.get("search_queries"), smart=True,
+                max_requests=settings.get("max_search_requests", 12), usage=search_usage,
             )
             project_context = " ".join(str(item.get("text") or "") for item in state.get("scenes", []))[:2600]
             options, media_report = _verify_scene_options(scene, options, settings, project_context)
@@ -355,6 +368,7 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
                         sc["options"] = opts
                         sc["selected"] = 0
                         sc["status"] = "found" if opts else "empty"
+                        sc["search_usage"] = search_usage
                         sc["media_verification"] = media_report
                         sc["rejected_media_count"] = int(media_report.get("rejected") or 0)
                         break
@@ -2649,11 +2663,12 @@ def research_scene(project_id: str, scene_id: str, body: SceneSearchBody):
     sources = [s for s in (body.sources or settings["sources"]) if s in providers.SOURCE_IDS]
     if not sources:
         raise HTTPException(status_code=400, detail="Selecione pelo menos uma fonte.")
+    search_usage: dict[str, Any] = {}
     options, messages = providers.search_scene_assets(
         query, sources, {}, per=settings["per_source"],
         orientation=providers.orientation_for(settings["ratio"]), pref=settings["media_pref"],
         queries=query_variants(query, settings.get("search_lang", "auto"), settings.get("query_extra", ""), 3)[1:],
-        smart=True,
+        smart=True, max_requests=settings.get("max_search_requests", 12), usage=search_usage,
     )
     project_context = " ".join(str(item.get("text") or "") for item in state.get("scenes", []))[:2600]
     options, media_report = _verify_scene_options(scene, options, settings, project_context)
@@ -2663,6 +2678,7 @@ def research_scene(project_id: str, scene_id: str, body: SceneSearchBody):
         sc = _find_scene(s, scene_id)
         sc["query"] = query
         sc["options"] = keep + options
+        sc["search_usage"] = search_usage
         sc["selected"] = 0
         sc["status"] = "found" if (keep or options) else "empty"
         sc["media_verification"] = media_report

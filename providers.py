@@ -416,10 +416,20 @@ def order_options(options: list[dict[str, Any]], pref: str) -> list[dict[str, An
 
 def search_scene_assets(query: str, sources: list[str], source_counts: dict[str, int], *, per: int = 3,
                         orientation: str = "landscape", pref: str = "mixed", project_id: str = "",
-                        queries: list[str] | None = None, smart: bool = True) -> tuple[list[dict[str, Any]], list[str]]:
+                        queries: list[str] | None = None, smart: bool = True,
+                        max_requests: int = 12, usage: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     options: list[dict[str, Any]] = []
     messages: list[str] = []
-    per = max(1, min(8, per))
+    per = max(1, min(8, int(per)))
+    try:
+        max_requests = max(1, min(24, int(max_requests or 12)))
+    except (TypeError, ValueError):
+        max_requests = 12
+    # Cada combinação fonte + consulta conta como uma consulta aos bancos.
+    source_list = list(dict.fromkeys(str(s) for s in sources if str(s) in SOURCE_IDS))
+    requests_made = 0
+    requests_by_source: dict[str, int] = {}
+    queries_used: list[str] = []
     # Variantes: a principal primeiro; se o banco devolver pouco, tenta a curta.
     query_list: list[str] = []
     for value in ([query] + list(queries or [])):
@@ -431,7 +441,9 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
     query_list = query_list[:3]
 
     def run_source(source: str, q: str) -> None:
-        nonlocal messages
+        nonlocal messages, requests_made
+        requests_made += 1
+        requests_by_source[source] = requests_by_source.get(source, 0) + 1
         try:
             if source in ("youtube_video", "youtube_frame"):
                 from scenes import make_youtube_query
@@ -501,12 +513,31 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
                 messages.append(message)
 
     for q_index, q in enumerate(query_list):
-        for source in sources:
+        if not queries_used or queries_used[-1] != q:
+            queries_used.append(q)
+        for source in source_list:
+            if requests_made >= max_requests:
+                break
             run_source(source, q)
         deduped_now = {(o.get("provider"), o.get("id"), o.get("media_type")) for o in options}
-        # Já há material suficiente? Não gasta chamadas extras na segunda variante.
+        # Já há material suficiente? Não gasta chamadas extras nas demais consultas.
         if q_index == 0 and len(deduped_now) >= max(6, per * 2):
             break
+        if requests_made >= max_requests:
+            break
+
+    planned_requests = len(query_list) * len(source_list)
+    if usage is not None:
+        usage.clear()
+        usage.update({
+            "requests": requests_made,
+            "limit": max_requests,
+            "remaining": max(0, max_requests - requests_made),
+            "queries_used": queries_used,
+            "sources_used": list(requests_by_source),
+            "requests_by_source": dict(requests_by_source),
+            "limit_reached": requests_made >= max_requests and planned_requests > requests_made,
+        })
 
     seen = set()
     deduped = []
