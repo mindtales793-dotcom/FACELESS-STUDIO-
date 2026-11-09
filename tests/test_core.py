@@ -424,9 +424,10 @@ def test_youtube_thumbnail_source_cria_imagem_com_aviso(monkeypatch):
     )
     assert options
     assert options[0]["media_type"] == "image"
-    assert options[0]["provider"] == "YouTube · miniatura"
+    assert options[0]["provider"] == "YouTube · quadro"
     assert options[0]["requires_permission"] is True
-    assert options[0]["download_url"].endswith("hqdefault.jpg")
+    assert options[0]["frame_from_video"] is True
+    assert options[0]["download_url"].startswith("https://www.youtube.com/watch")
 
 
 def test_limit_video_duration_reencoda_clipe_acima_da_cota(monkeypatch, tmp_path):
