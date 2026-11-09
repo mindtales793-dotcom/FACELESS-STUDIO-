@@ -73,6 +73,17 @@ Aqui usamos os **mesmos modelos pela Gemini API** (`GEMINI_API_KEY`): Nano Banan
 Baixe o zip → extraia → feche o CapCut → rode `INSTALAR_NO_CAPCUT.bat` (precisa de Python no Windows) → abra o CapCut. O instalador faz backup do `root_meta_info.json`.
 **Limites:** feito para o CapCut desktop 8.x e **não foi testado no CapCut real** (o formato muda entre versões). Cor do template, vinheta, transições, ducking e os destaques na tela (cartões, etiquetas) ficam só no MP4. Se não abrir, use `legendas.srt` e a pasta Resources manualmente.
 
+## Busca visual inteligente e distribuição de mídia
+
+- **OpenRouter (OPENROUTER_API_KEY)**: interpreta cada bloco da narração junto de uma amostra do contexto geral do roteiro e retorna consultas visuais, uma descrição da cena, o tipo de mídia recomendado e uma nota de movimento de 0 a 100.
+- **Fallback em cascata**: se OpenRouter não estiver configurado ou falhar, tenta Gemini (GEMINI_API_KEY); sem os dois, usa a busca tradicional por palavras-chave. O modelo pode ser definido em OPENROUTER_MODEL ou no campo de modelo da aba Mídia. A lista de modelos pode ser carregada no próprio painel.
+- **Distribuição imagem/vídeo**: o controle de 0% a 100% define a quantidade-alvo de cenas em vídeo. A IA prioriza vídeo nas cenas com maior necessidade de movimento. Quando uma das fontes selecionadas não oferece o tipo desejado, a cena usa uma alternativa disponível e fica marcada como fallback.
+- **Limite de clipe**: todo vídeo usado na montagem é verificado e, se necessário, cortado pelo FFmpeg para até 10 segundos (ou menos, conforme a configuração). O áudio original do B-roll é removido para não competir com a narração. Se o FFmpeg falhar, o arquivo longo não é aceito como se estivesse dentro do limite.
+- **YouTube · miniatura**: fonte opcional, desmarcada por padrão. Usa a miniatura pública como imagem de prévia, não captura quadros arbitrários do vídeo. A miniatura continua sujeita a direitos autorais; use somente quando tiver autorização. A existência de um link público não concede licença de reutilização.
+- **Storyblocks**: a aba Biblioteca de Mídia pesquisa e mostra prévias. A autenticação usa STORYBLOCKS_API_KEY e STORYBLOCKS_API_SECRET com assinatura HMAC no servidor. As prévias não são arquivos licenciados para o render: abra a página do ativo e faça o download conforme sua licença/conta. Não coloque credenciais no navegador nem no Git.
+
+A API de chat do OpenRouter usa o formato compatível com Chat Completions e seu catálogo de modelos é consultado em /api/v1/models. Consulte a [documentação oficial de autenticação](https://openrouter.ai/docs/api_reference/authentication), [Chat Completions](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request) e [catálogo de modelos](https://openrouter.ai/docs/api/api-reference/models/get-models).
+
 ## Licenças e limites
 Cada mídia mostra autor, origem e licença (há lista de créditos no projeto pronto). Confira antes de monetizar. Pixabay (cache 24 h), Unsplash (rastreio de download) e Coverr (crédito) têm regras próprias, já respeitadas. Fontes: Poppins, Anton, Bebas Neue, Archivo Black, DM Serif Display, Cinzel, EB Garamond (OFL, em `static/fonts`).
 Render em 1080p é pesado em servidores com pouca CPU; valide em 720p.
