@@ -27,3 +27,15 @@ jobs:
       - name: Check Remotion TypeScript
         working-directory: remotion
         run: npx tsc --noEmit
+
+      - name: Build complete source ZIP
+        run: |
+          mkdir -p dist
+          git archive --format=zip --prefix=FACELESS-STUDIO/ HEAD > dist/FACELESS-STUDIO-completo.zip
+      - name: Upload Windows-ready source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: FACELESS-STUDIO-completo
+          path: dist/FACELESS-STUDIO-completo.zip
+          if-no-files-found: error
+          retention-days: 7
