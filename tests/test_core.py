@@ -308,3 +308,161 @@ def test_render_em_lote_enfileira_prontos_e_explica_os_ignorados(client, monkeyp
     # ids explícitos: um projeto já montado é aceito de novo? não, só "ready" entra; aqui forçamos um inexistente
     r2 = client.post("/api/projects/render-batch", json={"ids": [sem_midia]}).json()
     assert r2["queued"] == [] and len(r2["skipped"]) == 1
+
+
+# ------------------------------------------------------------------ OpenRouter, proporção de mídia, Storyblocks e limite de B-roll
+def test_normalize_settings_limita_percentual_e_duracao_de_clipes():
+    cfg = main.normalize_settings({
+        "video_percent": 145,
+        "max_video_seconds": 40,
+        "openrouter_model": "google/gemini-2.5-flash",
+    })
+    assert cfg["video_percent"] == 100
+    assert cfg["max_video_seconds"] == 10
+    assert cfg["openrouter_model"] == "google/gemini-2.5-flash"
+
+    cfg = main.normalize_settings({"video_percent": -5, "max_video_seconds": 0})
+    assert cfg["video_percent"] == 0
+    assert cfg["max_video_seconds"] == 1
+
+
+def test_auto_pick_respeita_cota_video_e_prioriza_nota_de_movimento():
+    from scenes import auto_pick
+
+    cenas = []
+    for idx, score in enumerate((95, 75, 35, 10)):
+        cenas.append({
+            "id": f"scene-{idx}",
+            "start": 0,
+            "end": 5,
+            "motion_score": score,
+            "recommended_media": "video" if score >= 50 else "image",
+            "options": [
+                {"id": f"vid-{idx}", "provider": "Pexels", "media_type": "video", "duration": 10, "width": 1280, "height": 720},
+                {"id": f"img-{idx}", "provider": "Unsplash", "media_type": "image", "width": 1280, "height": 720},
+            ],
+        })
+
+    auto_pick(cenas, "mixed", "16:9", video_percent=50)
+    escolhidos = [c["options"][c["selected"]]["media_type"] for c in cenas]
+    assert escolhidos == ["video", "video", "image", "image"]
+    assert [c["target_media_type"] for c in cenas] == escolhidos
+
+
+def test_openrouter_gera_consultas_com_contexto_e_nota_de_movimento(monkeypatch):
+    import json as _json
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": _json.dumps({
+                "palavras_chave": ["carro", "estrada"],
+                "consultas": ["car driving on highway", "traffic aerial view"],
+                "descricao_visual": "Carros em movimento numa rodovia.",
+                "motion_score": 92,
+                "recommended_media": "video",
+            })}}]}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["body"] = kwargs["json"]
+        return FakeResponse()
+
+    monkeypatch.setattr(scene_planner.requests, "post", fake_post)
+    plan = scene_planner.gerar_consultas_para_cena(
+        "O carro acelera pela estrada.",
+        idioma="pt",
+        contexto="O documentário explica como o trânsito muda a vida nas grandes cidades.",
+        model="google/gemini-2.5-flash",
+    )
+    assert plan["provider"] == "openrouter"
+    assert plan["motion_score"] == 92
+    assert plan["recommended_media"] == "video"
+    assert "contexto" in captured["body"]["messages"][1]["content"].lower()
+    assert captured["body"]["model"] == "google/gemini-2.5-flash"
+
+
+def test_storyblocks_assinatura_hmac_tem_formato_valido():
+    import hashlib as _hashlib
+    import hmac as _hmac
+    import storyblocks_mgr
+
+    resource = "/api/v2/videos/search"
+    params = storyblocks_mgr._signed_params(resource, "api-key", "api-secret")
+    expected = _hmac.new(
+        ("api-secret" + params["EXPIRES"]).encode("utf-8"),
+        resource.encode("utf-8"),
+        _hashlib.sha256,
+    ).hexdigest()
+    assert params["APIKEY"] == "api-key"
+    assert params["HMAC"] == expected
+    assert params["EXPIRES"].isdigit()
+
+
+def test_youtube_thumbnail_source_cria_imagem_com_aviso(monkeypatch):
+    import providers
+
+    monkeypatch.setattr(providers.youtube_mgr, "youtube_search", lambda *args, **kwargs: [{
+        "id": "yt_abcdefghijk",
+        "provider": "YouTube",
+        "media_type": "video",
+        "download_url": "https://www.youtube.com/watch?v=abcdefghijk",
+        "thumbnail": "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg",
+        "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+        "title": "City traffic footage",
+        "duration": 30,
+    }])
+    options, messages = providers.search_scene_assets(
+        "city traffic", ["youtube_frame"], {}, per=1, orientation="landscape",
+    )
+    assert options
+    assert options[0]["media_type"] == "image"
+    assert options[0]["provider"] == "YouTube · miniatura"
+    assert options[0]["requires_permission"] is True
+    assert options[0]["download_url"].endswith("hqdefault.jpg")
+
+
+def test_limit_video_duration_reencoda_clipe_acima_da_cota(monkeypatch, tmp_path):
+    import render
+
+    source = tmp_path / "video-original.mp4"
+    source.write_bytes(b"origem")
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    fake_ffmpeg.write_text("fake")
+    monkeypatch.setattr(render, "ffmpeg_path", lambda: str(fake_ffmpeg))
+    monkeypatch.setattr(render, "media_duration", lambda path: 14.0 if Path(path).name == source.name else 9.9)
+
+    def fake_run(command, **kwargs):
+        Path(command[-1]).write_bytes(b"x" * 2048)
+        class Result:
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(render.subprocess, "run", fake_run)
+    result = render._limit_video_duration(source, tmp_path, max_seconds=10)
+    assert result.exists()
+    assert result != source
+    assert "10s.mp4" in result.name
+    assert render.media_duration(result) <= 10
+
+
+def test_storyblocks_route_exige_as_duas_credenciais(client, monkeypatch):
+    monkeypatch.setenv("STORYBLOCKS_API_KEY", "")
+    monkeypatch.setenv("STORYBLOCKS_API_SECRET", "")
+    response = client.post("/api/storyblocks/search", json={"query": "nature"})
+    assert response.status_code == 400
+    assert "API Key" in response.json()["detail"]
+
+
+def test_openrouter_modelos_exige_chave(client, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    response = client.get("/api/openrouter/models")
+    assert response.status_code == 400
+    assert "OPENROUTER_API_KEY" in response.json()["detail"]
