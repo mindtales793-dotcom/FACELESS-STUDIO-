@@ -480,3 +480,67 @@ def test_diagnostico_api_nao_expoe_chaves(client, monkeypatch):
     assert "chave-super-secreta-de-teste" not in response.text
     assert all("detail" in item and "status" in item for item in payload["checks"])
 
+
+
+def test_openrouter_confere_previews_e_descarta_midia_sem_relacao(monkeypatch):
+    import json as _json
+    import media_relevance
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": _json.dumps({
+                "resultados": [
+                    {"indice": 0, "nota": 94, "motivo": "Mostra exatamente a ação narrada."},
+                    {"indice": 1, "nota": 18, "motivo": "A prévia mostra um assunto diferente."},
+                ]
+            })}}]}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["body"] = kwargs["json"]
+        return FakeResponse()
+
+    monkeypatch.setattr(media_relevance.requests, "post", fake_post)
+    candidates = [
+        {"id": "good", "provider": "Pexels", "media_type": "video", "thumbnail": "https://img.test/good.jpg", "title": "Used car purchase"},
+        {"id": "bad", "provider": "YouTube", "media_type": "video", "thumbnail": "https://img.test/bad.jpg", "title": "Luxury sports car"},
+    ]
+    accepted, report = media_relevance.verify_scene_candidates(
+        scene_text="Ele comprou um carro usado à vista.",
+        visual_description="Pessoa comprando um carro usado em uma loja simples.",
+        context="A narração compara comprar à vista com financiar um carro.",
+        candidates=candidates,
+        model="google/gemini-2.5-flash",
+        min_score=68,
+    )
+
+    assert report["status"] == "verified"
+    assert report["accepted"] == 1
+    assert report["rejected"] == 1
+    assert len(accepted) == 1
+    assert accepted[0]["id"] == "good"
+    assert accepted[0]["media_match_score"] == 94
+    assert accepted[0]["relevance_verified"] is True
+    assert any(part.get("type") == "image_url" for part in captured["body"]["messages"][1]["content"])
+
+
+def test_openrouter_visual_sem_chave_nao_quebra_busca(monkeypatch):
+    import media_relevance
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    candidates = [{"id": "a", "thumbnail": "https://img.test/a.jpg"}]
+    kept, report = media_relevance.verify_scene_candidates(
+        scene_text="Uma fala de teste.",
+        visual_description="Cena ilustrativa.",
+        context="",
+        candidates=candidates,
+    )
+    assert kept == candidates
+    assert report["status"] == "unavailable"
+    assert report["accepted"] == 1
