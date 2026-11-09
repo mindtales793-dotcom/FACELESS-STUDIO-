@@ -641,10 +641,14 @@ function renderVoice() {
   $e('fishStatus').textContent = S.health?.fish_audio ? 'Fish Audio conectado. As chaves ficam só no servidor.' : 'Configure FISH_API_KEY no arquivo .env (aba Chaves de API) para ativar a geração.';
   const j = v.job;
   $e('ttsProgress').hidden = !j;
-  if (j) { $e('ttsFill').style.width = `${j.progress || 0}%`; $e('ttsPercent').textContent = `${j.progress || 0}%`; $e('ttsMessage').textContent = j.message || 'Gerando…'; }
-  const done = j && j.status === 'complete';
-  const failed = j && j.status === 'failed';
-  const generating = j && j.status === 'generating';
+  if (j) {
+    $e('ttsFill').style.width = `${j.progress || 0}%`;
+    $e('ttsPercent').textContent = `${j.progress || 0}%`;
+    $e('ttsMessage').textContent = j.message || 'Gerando…';
+  }
+  const done = !!j && j.status === 'complete';
+  const failed = !!j && j.status === 'failed';
+  const generating = !!j && (j.status === 'queued' || j.status === 'generating');
   const paused = !!j && j.paused;
   const stepControls = $e('voiceStepControls');
   if (stepControls) {
@@ -653,13 +657,54 @@ function renderVoice() {
     $e('resumeNarration').hidden = !paused;
     $e('redoNarration').hidden = !(failed || paused);
   }
-  const au = $e('genAudio'); au.hidden = !done; if (done && au.getAttribute('src') !== j.audio_url) au.src = j.audio_url;
-  $e('genLinks').hidden = !done; if (done) { $e('dlAudio').href = j.audio_url; $e('dlSrt').href = j.srt_url; }
+
+  // Exibe os blocos reais processados pelo motor, sem disparar um job separado para cada parágrafo.
+  const blocks = j && Array.isArray(j.blocks) ? j.blocks : [];
+  const blocksBox = $e('voiceBlocksBox');
+  const blocksTitle = $e('voiceBlocksTitle');
+  const blocksList = $e('voiceBlocksList');
+  if (blocksBox && blocksTitle && blocksList) {
+    blocksBox.style.display = j ? 'block' : 'none';
+    if (blocks.length) {
+      const finished = blocks.filter(b => b.status === 'complete' || b.status === 'cached').length;
+      blocksTitle.textContent = `${finished} de ${blocks.length} blocos prontos`;
+      blocksList.innerHTML = blocks.map((b, i) => {
+        const status = b.status === 'complete' || b.status === 'cached'
+          ? `✓ Pronto (${fmtTime(b.duration || 0)})`
+          : b.status === 'failed' ? `✗ ${esc(String(b.error || 'Falhou'))}`
+          : 'Na fila / gerando…';
+        const preview = esc(String(b.text || '').slice(0, 120));
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--line)"><div style="font-size:10px;color:var(--muted)">Bloco ${i + 1} · ${status}</div><div style="font-size:11px;color:#eaf2ff;white-space:normal">${preview}</div></div>`;
+      }).join('');
+    } else {
+      blocksTitle.textContent = j ? (j.message || 'Preparando blocos…') : 'Aguardando geração…';
+      blocksList.textContent = '';
+    }
+  }
+
+  const au = $e('genAudio');
+  const audioUrl = done ? (j.audio_url || '') : '';
+  au.hidden = !done;
+  if (audioUrl && au.getAttribute('src') !== audioUrl) {
+    au.src = audioUrl;
+    au.load();
+  } else if (!audioUrl && au.hasAttribute('src')) {
+    au.pause();
+    au.removeAttribute('src');
+    au.load();
+  }
+  $e('genLinks').hidden = !done;
+  if (done) {
+    $e('dlAudio').href = j.audio_download_url || j.audio_url;
+    $e('dlSrt').href = j.srt_url;
+  }
   $e('useNarration').disabled = !done;
   $e('generateNarration').disabled = v.busy || generating || paused;
-  $e('generateNarration').innerHTML = v.busy || generating || paused ? `<span class="spin"></span> ${paused ? 'Pausado' : 'Gerando…'}` : `${ic('spark')} ${failed ? 'Tentar de novo' : 'Gerar narração MP3'}`;
-  if (j && j.status === 'failed') $e('fishStatus').textContent = j.error || j.message;
-  if (done) $e('fishStatus').textContent = `Áudio pronto · ${fmtTime(j.duration)} · SRT estimado gerado.`;
+  $e('generateNarration').innerHTML = v.busy || generating || paused
+    ? `<span class="spin"></span> ${paused ? 'Pausado' : 'Gerando…'}`
+    : `${ic('spark')} ${failed ? 'Tentar de novo' : 'Gerar narração MP3'}`;
+  if (failed) $e('fishStatus').textContent = j.error || j.message || 'A geração falhou.';
+  if (done) $e('fishStatus').textContent = `Áudio pronto · ${fmtTime(j.duration)} · MP3 completo disponível para reprodução e download.`;
   if (paused) $e('fishStatus').textContent = 'Narração pausada. Clique em Retomar para continuar.';
 }
 document.addEventListener('input', e => {
@@ -738,20 +783,28 @@ async function voiceClick(t) {
     try { await api(`/api/narrations/${v.job.id}/redo`, { method: 'POST' }); v.job = { status: 'queued', progress: 0, message: 'Recomeçando…', paused: false }; v.busy = true; renderVoice(); pollNarration(v.job.id); }
     catch (err) { toast(err.message); v.busy = false; renderVoice(); } finally { btn.disabled = false; }
   } else if (btn.id === 'generateNarration') {
-    if (!v.script.trim()) return toast('Cole o roteiro para narrar.');
-    const blocks = v.script.split(/\n\s*\n/).filter(b => b.trim()).map(b => b.trim());
-    if (!blocks.length) return toast('Não foi possível dividir o roteiro em blocos.');
+    const script = v.script.trim();
+    if (!script) return toast('Cole o roteiro para narrar.');
     v.busy = true;
-    v.blocks = [];
-    v.blockJobs = [];
-    v.blockIndex = 0;
-    v.blocksTotal = blocks.length;
-    document.getElementById('voiceBlocksBox').style.display = 'block';
-    document.getElementById('voiceBlocksTitle').textContent = `Gerando ${blocks.length} bloco${blocks.length !== 1 ? 's' : ''}…`;
-    document.getElementById('voiceBlocksList').innerHTML = '';
-    v.job = { progress: 0, message: 'Gerando narração em blocos…' };
+    v.job = { status: 'queued', progress: 0, message: 'Enviando o roteiro completo para o motor de narração…' };
     renderVoice();
-    processNextBlock(blocks);
+    try {
+      // Um único job recebe o roteiro inteiro; o motor divide, gera, une e valida o MP3.
+      const job = await jpost('/api/narrations', {
+        text: script,
+        reference_id: v.voiceId || null,
+        model: v.model
+      });
+      if (!job || !job.id) throw new Error('O servidor não retornou o identificador da narração.');
+      v.job = { ...job, status: job.status || 'queued', message: job.message || 'Narração adicionada à fila.' };
+      renderVoice();
+      pollNarration(job.id);
+    } catch (err) {
+      v.busy = false;
+      v.job = { status: 'failed', progress: 0, message: err.message, error: err.message };
+      renderVoice();
+      toast(err.message);
+    }
   } else if (btn.id === 'useNarration') useNarration(btn);
 }
 async function pollNarration(id) {
@@ -764,65 +817,6 @@ async function pollNarration(id) {
   } catch (err) { v.busy = false; v.job = { status: 'failed', error: err.message }; renderVoice(); }
 }
 
-async function processNextBlock(blocks) {
-  const v = S.voice;
-  if (v.blockIndex >= blocks.length) {
-    v.busy = false;
-    v.job = { status: 'complete', progress: 100, message: 'Todos os blocos gerados.', audio_url: null, srt_url: null, duration: 0 };
-    renderVoice();
-    document.getElementById('voiceBlocksTitle').textContent = `Todos os ${blocks.length} blocos gerados.`;
-    toast('Todos os blocos gerados!');
-    return;
-  }
-  const text = blocks[v.blockIndex];
-  const label = text.slice(0, 50) + (text.length > 50 ? '…' : '');
-  const list = document.getElementById('voiceBlocksList');
-  const item = document.createElement('div');
-  item.id = `block-${v.blockIndex}`;
-  item.style.marginBottom = '6px';
-  item.style.padding = '6px';
-  item.style.border = '1px solid var(--line)';
-  item.style.borderRadius = '8px';
-  item.style.background = '#0b1224';
-  item.innerHTML = `<div style="font-size:10.5px;color:var(--muted);margin-bottom:2px">${v.blockIndex + 1} / ${blocks.length}</div><div style="font-size:11px;color:#eaf2ff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</div><div style="font-size:10px;color:var(--dim);margin-top:2px">Gerando…</div>`;
-  list.appendChild(item);
-  list.scrollTop = list.scrollHeight;
-  try {
-    const job = await jpost('/api/narrations', { text, reference_id: v.voiceId || null, model: v.model });
-    await pollNarrationBlock(job.id, v.blockIndex, blocks);
-  } catch (err) {
-    const item = document.getElementById(`block-${v.blockIndex}`);
-    if (item) item.querySelector('div:last-child').textContent = `Erro: ${err.message}`;
-    v.blockIndex++;
-    setTimeout(() => processNextBlock(blocks), 1000);
-  }
-}
-
-async function pollNarrationBlock(id, index, blocks) {
-  const v = S.voice;
-  try {
-    const j = await api(`/api/narrations/${id}`);
-    const item = document.getElementById(`block-${index}`);
-    if (j.status === 'complete') {
-      if (item) item.querySelector('div:last-child').textContent = `✓ Pronto (${fmtTime(j.duration || 0)})`;
-      v.blockJobs = v.blockJobs || [];
-      v.blockJobs.push(j);
-      v.job = j; // último bloco completo, para "Usar no projeto"
-      v.blockIndex++;
-      setTimeout(() => processNextBlock(blocks), 800);
-    } else if (j.status === 'failed') {
-      if (item) item.querySelector('div:last-child').textContent = `✗ Falhou: ${j.error}`;
-      v.blockIndex++;
-      setTimeout(() => processNextBlock(blocks), 800);
-    } else {
-      if (item) item.querySelector('div:last-child').textContent = `Gerando… ${j.progress || 0}%`;
-      setTimeout(() => pollNarrationBlock(id, index, blocks), 2000);
-    }
-  } catch (err) {
-    v.blockIndex++;
-    setTimeout(() => processNextBlock(blocks), 1000);
-  }
-}
 async function useNarration(btn) {
   const j = S.voice.job; if (!j || j.status !== 'complete') return;
   btn.disabled = true;
