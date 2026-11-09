@@ -147,6 +147,48 @@ def test_merge_audio_insere_pausas(tmp_path):
     assert dur > 2.2  # 2 s de áudio + 0,3 s de pausa (antes a pausa nunca era criada: ~2,0 s)
 
 
+def _salvar_narracao_completa_teste(job_id: str) -> Path:
+    pasta = Path(_TMP) / "narrations" / job_id
+    pasta.mkdir(parents=True, exist_ok=True)
+    audio = pasta / "narration.mp3"
+    audio.write_bytes(b"ID3-teste-audio")
+    (pasta / "narration.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nTeste\n", encoding="utf-8"
+    )
+    main.nar._write_job(job_id, {
+        "id": job_id, "status": "complete", "audio_file": "narration.mp3",
+        "srt_file": "narration.srt", "paused": False, "cancelled": False,
+    })
+    return audio
+
+
+def test_status_narracao_separa_url_de_player_e_download():
+    job_id = "a" * 32
+    _salvar_narracao_completa_teste(job_id)
+    status = main.nar.get_job(job_id)
+    assert status["audio_url"] == f"/api/narrations/{job_id}/audio"
+    assert status["audio_download_url"] == f"/api/narrations/{job_id}/download"
+    assert status["srt_url"] == f"/api/narrations/{job_id}/subtitles"
+
+
+def test_player_recebe_mp3_com_disposition_inline(client):
+    job_id = "b" * 32
+    audio = _salvar_narracao_completa_teste(job_id)
+    response = client.get(f"/api/narrations/{job_id}/audio")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/mpeg")
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.content == audio.read_bytes()
+
+
+def test_download_narracao_continua_com_disposition_attachment(client):
+    job_id = "c" * 32
+    _salvar_narracao_completa_teste(job_id)
+    response = client.get(f"/api/narrations/{job_id}/download")
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].startswith("attachment")
+
+
 # ------------------------------------------------------------------ fila de render, lote e recuperação
 import threading  # noqa: E402
 import time  # noqa: E402
