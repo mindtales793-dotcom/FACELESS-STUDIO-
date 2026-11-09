@@ -14,7 +14,7 @@ const defaultProps: FacelessSceneProps = {
 export const RemotionRoot: React.FC = () => (
   <Composition
     id="FacelessScene"
-    component={FacelessScene}
+    component={FacelessScene as unknown as React.ComponentType<Record<string, unknown>>}
     durationInFrames={120}
     fps={24}
     width={1280}
