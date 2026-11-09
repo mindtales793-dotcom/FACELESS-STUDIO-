@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -45,12 +46,11 @@ from capcut import build_capcut_package
 import capcut_draft
 from capcut_draft import DRAFTS_DIR
 from cost_ledger import register_cost, list_costs, total_costs
-from providers_base import MediaProvider, ImageGenProvider, VideoGenProvider, AvatarProvider, MediaFetcher
 from render import build_mix_cmd, music_path, render_project
 from scenes import auto_pick, group_cues, make_query, make_youtube_query, parse_srt, query_variants
 from store import (
     ACTIVE_JOBS, BASE_DIR, DATA_DIR, MAX_MEDIA_MB, MUSIC_DIR, PREVIEW_DIR, Cancelled, Tracker, default_stages, ffmpeg_has_filter,
-    ffmpeg_path, lock, media_duration, now_iso, patch_state, probe_media, project_dir, read_state, run_ffmpeg, write_state,
+    ffmpeg_path, media_duration, now_iso, patch_state, probe_media, project_dir, read_state, run_ffmpeg, write_state,
 )
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
@@ -184,7 +184,10 @@ def analyze_project(pid: str) -> None:
         if settings["autopilot"]:
             T.update(stage="review", status="done", detail="Escolha automática (piloto automático)", log="Piloto automático: escolhi a melhor opção de cada cena, sem repetir mídia.")
             ACTIVE_JOBS.discard(pid)
-            render_project(pid)
+            # Entra na fila global em vez de renderizar aqui: com vários projetos em piloto automático,
+            # todos montando ao mesmo tempo travariam o computador.
+            _mark_queued_render(pid)
+            enqueue_render(pid)
             return
         T.update(stage="review", status="waiting", detail="Aguardando você escolher as cenas e iniciar a montagem",
                  overall=100, message="Cenas prontas. Revise e inicie a montagem.", log="Pré-seleção feita. Revise as cenas e clique em Montar vídeo.")
@@ -193,8 +196,9 @@ def analyze_project(pid: str) -> None:
         patch_state(pid, lambda s: s.update({"status": "ready", "message": "Busca cancelada.", "cancel_requested": False}))
         T.log("Busca cancelada por você.", "warn")
     except Exception as exc:
-        patch_state(pid, lambda s: s.update({"status": "failed", "error": str(exc), "message": str(exc)}))
-        T.update(stage="search", status="failed", detail=str(exc)[:200], log=str(exc)[:500], level="error")
+        err = str(exc)  # copia: a variável `exc` some ao sair do except e a lambda a captura por referência
+        patch_state(pid, lambda s: s.update({"status": "failed", "error": err, "message": err}))
+        T.update(stage="search", status="failed", detail=err[:200], log=err[:500], level="error")
     finally:
         ACTIVE_JOBS.discard(pid)
 
@@ -255,20 +259,146 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
         patch_state(pid, lambda s: s.update({"status": "ready", "message": "Busca cancelada.", "cancel_requested": False}))
         T.log("Busca cancelada por você.", "warn")
     except Exception as exc:
-        patch_state(pid, lambda s: s.update({"status": "failed", "error": str(exc), "message": str(exc)}))
-        T.update(stage="search", status="failed", detail=str(exc)[:200], log=str(exc)[:500], level="error")
+        err = str(exc)  # copia: a variável `exc` some ao sair do except e a lambda a captura por referência
+        patch_state(pid, lambda s: s.update({"status": "failed", "error": err, "message": err}))
+        T.update(stage="search", status="failed", detail=err[:200], log=err[:500], level="error")
     finally:
         ACTIVE_JOBS.discard(pid)
 
 
+# ------------------------------------------------------------------ fila global de render
+# Render com FFmpeg é pesado: vários ao mesmo tempo travam um PC comum. Os projetos esperam numa fila
+# (status "queued_render") e MAX_CONCURRENT_RENDERS trabalhadores (padrão 1) montam um de cada vez.
+# Os trabalhadores são threads próprias, para não ocupar o pool que atende as rotas da API.
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, "") or default))
+    except ValueError:
+        return default
+
+
+MAX_CONCURRENT_RENDERS = _env_int("MAX_CONCURRENT_RENDERS", 1)
+_RENDER_QUEUE: queue.Queue[str] = queue.Queue()
+_RENDER_WAITING: list[str] = []
+_RENDER_RUNNING: set[str] = set()
+_RENDER_LOCK = threading.Lock()
+_RENDER_WORKERS_STARTED = False
+
+
 def run_render_job(pid: str) -> None:
+    """Executado pelo trabalhador da fila quando chega a vez do projeto."""
     if pid in ACTIVE_JOBS:
         return
     ACTIVE_JOBS.add(pid)
     try:
+        try:
+            state = read_state(pid)
+        except HTTPException:
+            return  # o projeto foi apagado enquanto esperava na fila
+        if state.get("cancel_requested"):
+            patch_state(pid, lambda s: s.update({"status": "ready", "message": "Montagem cancelada na fila.", "cancel_requested": False}))
+            Tracker(pid).log("Montagem cancelada enquanto esperava na fila.", "warn")
+            return
         render_project(pid)
     finally:
         ACTIVE_JOBS.discard(pid)
+
+
+def _render_worker() -> None:
+    while True:
+        pid = _RENDER_QUEUE.get()
+        with _RENDER_LOCK:
+            if pid in _RENDER_WAITING:
+                _RENDER_WAITING.remove(pid)
+            _RENDER_RUNNING.add(pid)
+        try:
+            run_render_job(pid)
+        except Exception:  # um projeto com erro não pode derrubar o trabalhador e parar a fila
+            logging.getLogger("uvicorn.error").exception("Falha inesperada na fila de render (projeto %s)", pid)
+        finally:
+            with _RENDER_LOCK:
+                _RENDER_RUNNING.discard(pid)
+            _RENDER_QUEUE.task_done()
+
+
+def enqueue_render(pid: str) -> int:
+    """Põe o projeto na fila de montagem e devolve a posição de espera (0 = já está montando)."""
+    global _RENDER_WORKERS_STARTED
+    with _RENDER_LOCK:
+        if not _RENDER_WORKERS_STARTED:
+            for n in range(MAX_CONCURRENT_RENDERS):
+                threading.Thread(target=_render_worker, name=f"render-worker-{n + 1}", daemon=True).start()
+            _RENDER_WORKERS_STARTED = True
+        if pid in _RENDER_RUNNING:
+            return 0
+        if pid in _RENDER_WAITING:
+            return _RENDER_WAITING.index(pid) + 1
+        _RENDER_WAITING.append(pid)
+        position = len(_RENDER_WAITING)
+    _RENDER_QUEUE.put(pid)
+    return position
+
+
+def render_queue_snapshot() -> dict[str, Any]:
+    with _RENDER_LOCK:
+        running, waiting = sorted(_RENDER_RUNNING), list(_RENDER_WAITING)
+
+    def describe(pid: str) -> dict[str, Any]:
+        try:
+            return {"id": pid, "title": read_state(pid).get("title")}
+        except HTTPException:
+            return {"id": pid, "title": None}
+    return {"max_concurrent": MAX_CONCURRENT_RENDERS, "running": [describe(p) for p in running], "waiting": [describe(p) for p in waiting]}
+
+
+def _mark_queued_render(pid: str) -> None:
+    patch_state(pid, lambda s: s.update({"status": "queued_render", "progress": 0, "message": "Montagem na fila...", "error": None,
+                                         "cancel_requested": False, "settings_changed_after_render": False}))
+
+
+def queue_project_render(project_id: str) -> int:
+    """Valida o projeto e o coloca na fila de montagem. Levanta HTTPException se não puder."""
+    state = read_state(project_id)
+    if project_id in ACTIVE_JOBS or state.get("status") in ("rendering", "queued_render"):
+        raise HTTPException(status_code=409, detail="Este projeto já está sendo montado.")
+    if state.get("status") == "searching":
+        raise HTTPException(status_code=409, detail="A busca de mídia ainda está em andamento.")
+    if not any(s.get("options") for s in state.get("scenes", [])):
+        raise HTTPException(status_code=400, detail="Nenhuma cena tem mídia. Ajuste as fontes e busque de novo, ou envie seus próprios arquivos.")
+    _mark_queued_render(project_id)
+    return enqueue_render(project_id)
+
+
+def recover_interrupted_projects() -> int:
+    """No arranque do servidor nada está rodando. Projetos que ficaram presos em busca/montagem/CapCut
+    (porque o servidor caiu ou foi reiniciado) voltam a "ready", com as escolhas mantidas, como no cancelamento."""
+    busy = ("queued", "searching", "rendering", "queued_render")
+    fixed = 0
+    for folder in DATA_DIR.iterdir():
+        if not (folder.is_dir() and re.fullmatch(r"[a-f0-9]{32}", folder.name)):
+            continue
+        try:
+            state = read_state(folder.name)
+        except Exception:
+            continue
+        if state.get("status") not in busy and (state.get("capcut") or {}).get("status") != "building":
+            continue
+
+        def fix(s: dict[str, Any]) -> None:
+            if s.get("status") in busy:
+                s["status"] = "ready"
+                s["message"] = "Interrompido porque o servidor foi reiniciado. Suas escolhas foram mantidas; busque ou monte de novo."
+                s["cancel_requested"] = False
+                for st in s.get("stages", {}).values():
+                    if st.get("status") == "running":
+                        st["status"] = "pending"
+            if (s.get("capcut") or {}).get("status") == "building":
+                s["capcut"] = {"status": "none"}
+            s["updated_at"] = now_iso()
+        patch_state(folder.name, fix)
+        Tracker(folder.name).log("O servidor foi reiniciado durante esta etapa; o projeto voltou ao estado anterior.", "warn")
+        fixed += 1
+    return fixed
 
 
 def run_capcut_job(pid: str) -> None:
@@ -282,8 +412,9 @@ def run_capcut_job(pid: str) -> None:
         patch_state(pid, lambda s: s.update({"capcut": {"status": "none"}, "cancel_requested": False}))
         T.update(stage="capcut", status="pending", log="Exportação para o CapCut cancelada.", level="warn")
     except Exception as exc:
-        patch_state(pid, lambda s: s.update({"capcut": {"status": "failed", "error": str(exc)[:300]}}))
-        T.update(stage="capcut", status="failed", detail=str(exc)[:200], log=f"Falha ao montar o projeto do CapCut: {exc}", level="error")
+        err = str(exc)
+        patch_state(pid, lambda s: s.update({"capcut": {"status": "failed", "error": err[:300]}}))
+        T.update(stage="capcut", status="failed", detail=err[:200], log=f"Falha ao montar o projeto do CapCut: {err}", level="error")
     finally:
         ACTIVE_JOBS.discard(pid)
 
@@ -416,13 +547,14 @@ def flow_queue_retry(body: dict[str, Any], background_tasks: BackgroundTasks):
     item["status"] = "processando"
     item["erro"] = None
     _queue_save(item)
+    # BackgroundTasks tem de ser o parâmetro injetado pelo FastAPI: uma instância criada à mão
+    # nunca é executada, e o item ficava preso em "processando" para sempre.
     background_tasks.add_task(_run_queue_item, item)
     return {"ok": True, "id": item_id}
 
 
 def _run_queue_item(item: dict[str, Any]) -> None:
     """Executa um item da fila em background e atualiza o status."""
-    item_id = item["id"]
     try:
         prompt = item.get("prompt", "").strip()
         kind = item.get("kind", "image")
@@ -567,6 +699,35 @@ def active_app_password() -> str:
     return pwd if keys_mgr.is_active_key(pwd) else ""
 
 
+def _safe_equals(a: str, b: str) -> bool:
+    """Comparação em tempo constante. hmac.compare_digest com str só aceita ASCII e levanta TypeError
+    (erro 500) com senha acentuada ou cookie malformado; comparar em bytes evita isso."""
+    return hmac.compare_digest((a or "").encode("utf-8"), (b or "").encode("utf-8"))
+
+
+def _session_token(pwd: str) -> str:
+    """Valor do cookie de sessão: HMAC com segredo próprio (SESSION_SECRET, opcional) em vez do SHA-256
+    puro da senha, que era o mesmo valor em qualquer instalação e permitia testar senhas offline."""
+    secret = os.getenv("SESSION_SECRET", "").strip() or pwd
+    return hmac.new(secret.encode("utf-8"), b"faceless-session-v1:" + pwd.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+# Limite de tentativas de login por IP (em memória): MAX_LOGIN_FAILS erros em LOGIN_WINDOW_S segundos.
+MAX_LOGIN_FAILS = 8
+LOGIN_WINDOW_S = 300
+_LOGIN_FAILS: dict[str, list[float]] = {}
+
+
+def _login_blocked(ip: str) -> bool:
+    now = time.time()
+    recent = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < LOGIN_WINDOW_S]
+    if recent:
+        _LOGIN_FAILS[ip] = recent
+    else:
+        _LOGIN_FAILS.pop(ip, None)
+    return len(recent) >= MAX_LOGIN_FAILS
+
+
 class PasswordMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         pwd = active_app_password()
@@ -576,8 +737,8 @@ class PasswordMiddleware(BaseHTTPMiddleware):
         if path in ("/", "/api/login", "/api/health", "/favicon.ico") or path.startswith("/static/"):
             return await call_next(request)
         token = request.cookies.get("faceless_session", "")
-        expected = hashlib.sha256(pwd.encode()).hexdigest()
-        if not hmac.compare_digest(token, expected):
+        expected = _session_token(pwd)
+        if not _safe_equals(token, expected):
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "Acesso protegido. Faça login."}, status_code=401)
             return HTMLResponse("Acesso protegido. Abra o app e faça login.", status_code=401)
@@ -679,10 +840,26 @@ async def youtube_download_route(body: YouTubeDownloadBody):
             raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _safe_child(folder: Path, name: str) -> Path | None:
+    """Resolve `name` dentro de `folder` e devolve o arquivo, ou None se escapar da pasta (path traversal).
+
+    Em Windows (o app roda lá via INICIAR_WINDOWS.bat) um nome como "..\\..\\x" atravessa pastas,
+    então não basta confiar que o roteador não aceita "/" no parâmetro.
+    """
+    base = folder.resolve()
+    try:
+        p = (base / name).resolve()
+    except (OSError, ValueError):
+        return None
+    if base not in p.parents or not p.is_file():
+        return None
+    return p
+
+
 @app.get("/api/youtube/file/{name}")
 def get_youtube_downloaded_file(name: str):
-    p = (DATA_DIR / "youtube_downloads" / name).resolve()
-    if not p.is_file():
+    p = _safe_child(DATA_DIR / "youtube_downloads", name)
+    if p is None:
         raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
     return FileResponse(p, media_type="video/mp4")
 
@@ -696,8 +873,8 @@ def get_flow_gallery():
 @app.get("/api/flow/gallery/{name}")
 def get_flow_gallery_file(name: str):
     for folder in (flow.FLOW_GALLERY_DIR, flow.MCP_OUT_DIR):
-        p = (folder / name).resolve()
-        if p.is_file():
+        p = _safe_child(folder, name)
+        if p is not None:
             is_video = p.suffix.lower() in (".mp4", ".mov")
             return FileResponse(p, media_type="video/mp4" if is_video else "image/png")
     raise HTTPException(status_code=404, detail="Arquivo da galeria não encontrado.")
@@ -927,10 +1104,9 @@ async def flow_upload_reference(reference: UploadFile = File(...)):
 
 @app.get("/api/flow/reference/{name}")
 def flow_get_reference(name: str):
-    for folder in (FLOW_REF_DIR,):
-        p = (folder / name).resolve()
-        if p.is_file():
-            return FileResponse(p)
+    p = _safe_child(FLOW_REF_DIR, name)
+    if p is not None:
+        return FileResponse(p)
     raise HTTPException(status_code=404, detail="Imagem de referência não encontrada.")
 
 
@@ -1255,11 +1431,18 @@ def login(body: LoginBody, request: Request):
     pwd = active_app_password()
     if not pwd:
         return {"ok": True, "message": "Proteção por senha não está ativada."}
-    if not hmac.compare_digest(body.password, pwd):
+    ip = request.client.host if request.client else "?"
+    if _login_blocked(ip):
+        raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente de novo.")
+    if not _safe_equals(body.password, pwd):
+        _LOGIN_FAILS.setdefault(ip, []).append(time.time())
         raise HTTPException(status_code=401, detail="Senha incorreta.")
-    token = hashlib.sha256(pwd.encode()).hexdigest()
+    _LOGIN_FAILS.pop(ip, None)
+    token = _session_token(pwd)
+    # Atrás de proxy (Replit, nginx) o esquema visto pelo app é http; o proxy informa o original.
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
     response = JSONResponse({"ok": True})
-    response.set_cookie("faceless_session", token, httponly=True, secure=(request.url.scheme == "https"), samesite="lax", max_age=60 * 60 * 24 * 14)
+    response.set_cookie("faceless_session", token, httponly=True, secure=https, samesite="lax", max_age=60 * 60 * 24 * 14)
     return response
 
 
@@ -1627,6 +1810,16 @@ async def health_narration_proxy():
     return await nar_proxy.get_narration_health_proxy()
 
 
+@app.on_event("startup")
+def _recover_on_startup() -> None:
+    try:
+        n = recover_interrupted_projects()
+        if n:
+            logging.getLogger("uvicorn.error").warning("%d projeto(s) interrompido(s) por reinício foram recuperados.", n)
+    except Exception:  # a recuperação nunca pode impedir o servidor de subir
+        logging.getLogger("uvicorn.error").exception("Falha ao recuperar projetos interrompidos")
+
+
 @app.on_event("shutdown")
 async def shutdown_narration_proxy():
     await nar_proxy.close_client()
@@ -1636,6 +1829,7 @@ async def shutdown_narration_proxy():
 # Usa o mesmo diretório configurado pelo store/DATA_DIR no renderizador.
 MOTION_DIR = motion_render.MOTION_DIR
 MOTION_DIR.mkdir(parents=True, exist_ok=True)
+
 
 class MotionRenderBody(BaseModel):
     text: str
@@ -2615,20 +2809,47 @@ async def scenes_buscar_cadeia(project_id: str, body: SceneSearchBody):
 
 
 @app.post("/api/projects/{project_id}/render")
-def start_render(project_id: str, background_tasks: BackgroundTasks):
-    state = read_state(project_id)
-    if project_id in ACTIVE_JOBS or state.get("status") in ("rendering", "queued_render"):
-        raise HTTPException(status_code=409, detail="Este projeto já está sendo montado.")
-    if state.get("status") == "searching":
-        raise HTTPException(status_code=409, detail="A busca de mídia ainda está em andamento.")
-    if not any(s.get("options") for s in state.get("scenes", [])):
-        raise HTTPException(status_code=400, detail="Nenhuma cena tem mídia. Ajuste as fontes e busque de novo, ou envie seus próprios arquivos.")
+def start_render(project_id: str):
+    position = queue_project_render(project_id)
+    return {"ok": True, "status": "queued_render", "queue_position": position}
 
-    def fn(s: dict[str, Any]) -> None:
-        s.update({"status": "queued_render", "progress": 0, "message": "Montagem na fila...", "error": None, "cancel_requested": False, "settings_changed_after_render": False})
-    patch_state(project_id, fn)
-    background_tasks.add_task(run_render_job, project_id)
-    return {"ok": True, "status": "queued_render"}
+
+class RenderBatchBody(BaseModel):
+    ids: list[str] | None = None  # vazio = todos os projetos prontos para montar
+
+
+@app.post("/api/projects/render-batch")
+def render_batch(body: RenderBatchBody | None = None):
+    """Coloca vários projetos na fila de montagem de uma vez (a fila roda um por vez, do mais antigo ao mais novo).
+
+    Sem `ids`, enfileira todos os projetos com status "ready" que já têm mídia nas cenas.
+    """
+    ids = list(dict.fromkeys(body.ids)) if body and body.ids else None
+    if ids is None:
+        ready: list[tuple[str, str]] = []
+        for folder in DATA_DIR.iterdir():
+            if folder.is_dir() and re.fullmatch(r"[a-f0-9]{32}", folder.name):
+                try:
+                    st = read_state(folder.name)
+                except Exception:
+                    continue
+                if st.get("status") == "ready":
+                    ready.append((st.get("created_at") or "", folder.name))
+        ids = [pid for _, pid in sorted(ready)]
+    queued: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for pid in ids:
+        try:
+            queued.append({"id": pid, "queue_position": queue_project_render(pid)})
+        except HTTPException as exc:
+            skipped.append({"id": pid, "reason": exc.detail})
+    return {"ok": True, "queued": queued, "skipped": skipped}
+
+
+@app.get("/api/render-queue")
+def render_queue():
+    """O que está montando agora e o que espera na fila."""
+    return render_queue_snapshot()
 
 
 @app.post("/api/projects/{project_id}/cancel")
