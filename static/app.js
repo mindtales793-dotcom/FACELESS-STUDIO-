@@ -1090,7 +1090,7 @@ $('#projectList').addEventListener('click', async e => {
   const open = e.target.closest('[data-open]'); if (open) openProject(open.dataset.open);
 });
 
-const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo' };
+const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo', 'media-library': 'viewMediaLibrary' };
 function showView(name) {
   Object.keys(VIEW_ID).forEach(v => {
     const el = $('#' + VIEW_ID[v]);
@@ -1105,7 +1105,80 @@ function showView(name) {
   if (name === 'groq') loadGroqView();
   if (name === 'skills') loadSkillsView();
   if (name === 'skills-video') loadSkillsVideoView();
+  if (name === 'media-library') checkStoryblocksConnection();
 }
+
+
+/* ---------- Biblioteca de Mídia Storyblocks */
+async function checkStoryblocksConnection() {
+  const status = $('#storyblocksConnectionStatus');
+  if (!status) return;
+  status.textContent = 'Verificando...';
+  status.className = 'chip';
+  try {
+    const res = await jpost('/api/keys/test', { key_id: 'storyblocks' });
+    status.textContent = res.message || (res.ok ? 'Storyblocks conectado' : 'Falha na conexão');
+    status.className = res.ok ? 'chip ok' : 'chip warn';
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = 'chip warn';
+  }
+}
+function renderStoryblocksResults(items) {
+  const host = $('#storyblocksResults');
+  if (!host) return;
+  if (!items.length) {
+    host.innerHTML = '<div class="empty" style="grid-column:1/-1">Nenhum resultado encontrado. Tente palavras-chave diferentes.</div>';
+    return;
+  }
+  host.innerHTML = items.map(item => {
+    const isVideo = item.media_type === 'video';
+    const preview = item.download_url || item.thumbnail || '';
+    const media = isVideo
+      ? (preview ? `<video src="${esc(preview)}" poster="${esc(item.thumbnail || '')}" controls muted preload="none" playsinline></video>` : `<img src="${esc(item.thumbnail || '')}" alt="">`)
+      : `<img src="${esc(item.thumbnail || preview)}" alt="${esc(item.title || 'Imagem Storyblocks')}" loading="lazy">`;
+    return `
+      <article class="media-result-card">
+        <div class="media-result-preview">${media}<span class="media-type-tag">${isVideo ? 'VÍDEO' : 'IMAGEM'}</span></div>
+        <div class="media-result-body">
+          <strong title="${esc(item.title || '')}">${esc(item.title || 'Mídia Storyblocks')}</strong>
+          <div class="media-result-meta">${item.duration ? fmtTime(item.duration) + ' · ' : ''}${item.width && item.height ? esc(item.width + ' × ' + item.height) : 'Prévia disponível'}</div>
+          <div class="media-result-actions">
+            <a class="btn small primary" href="${esc(item.source_url || 'https://www.storyblocks.com')}" target="_blank" rel="noopener noreferrer">Ver licença e download</a>
+          </div>
+        </div>
+      </article>`;
+  }).join('');
+}
+async function searchStoryblocks(event) {
+  event?.preventDefault();
+  const query = ($('#storyblocksQuery')?.value || '').trim();
+  if (query.length < 2) return toast('Digite pelo menos dois caracteres.');
+  const host = $('#storyblocksResults');
+  const btn = $('#storyblocksSearchBtn');
+  const meta = $('#storyblocksResultMeta');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Pesquisando...'; }
+  if (host) host.innerHTML = '<div class="empty" style="grid-column:1/-1"><span class="spin"></span><br>Buscando na biblioteca Storyblocks...</div>';
+  if (meta) meta.textContent = 'Pesquisando: ' + query;
+  try {
+    const result = await jpost('/api/storyblocks/search', {
+      query,
+      media_type: $('#storyblocksType')?.value || 'video',
+      orientation: $('#storyblocksOrientation')?.value || 'landscape',
+      per: Number($('#storyblocksPer')?.value || 12),
+      project_id: S.projectId || 'faceless-media-library',
+    });
+    renderStoryblocksResults(result.results || []);
+    if (meta) meta.textContent = (result.total || 0) + ' resultado(s) para “' + result.query + '”.';
+  } catch (err) {
+    if (host) host.innerHTML = '<div class="form-error" style="grid-column:1/-1">' + esc(err.message) + '</div>';
+    if (meta) meta.textContent = 'A pesquisa não foi concluída.';
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = ic('search') + ' Pesquisar'; }
+  }
+}
+$('#storyblocksSearchForm')?.addEventListener('submit', searchStoryblocks);
+$('#storyblocksCheckBtn')?.addEventListener('click', checkStoryblocksConnection);
 
 /* ---------- View Skills de Vídeo (Estilos de Edição) */
 async function loadSkillsVideoView() {
