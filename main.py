@@ -33,6 +33,7 @@ import job_queue
 import keys_mgr
 import media_fetcher
 import media_providers
+import media_relevance
 import motion_render
 import skills
 import skills_video
@@ -134,6 +135,49 @@ def normalize_settings(raw: dict[str, Any] | None, base: dict[str, Any] | None =
 
 # ------------------------------------------------------------------ busca de mídia (etapa "search")
 
+
+def _scene_search_context(scenes: list[dict[str, Any]], index: int, script_context: str = "") -> str:
+    """Contexto global + fala vizinha para desambiguar cada bloco do SRT."""
+    parts = []
+    if script_context:
+        parts.append("CONTEXTO GERAL DO ROTEIRO: " + str(script_context)[:2600])
+    if index > 0:
+        previous = str(scenes[index - 1].get("text") or "").strip()
+        if previous:
+            parts.append("BLOCO IMEDIATAMENTE ANTERIOR: " + previous[:500])
+    current = str(scenes[index].get("text") or "").strip()
+    if current:
+        parts.append("BLOCO ATUAL (prioridade máxima): " + current[:1200])
+    if index + 1 < len(scenes):
+        following = str(scenes[index + 1].get("text") or "").strip()
+        if following:
+            parts.append("BLOCO IMEDIATAMENTE SEGUINTE: " + following[:500])
+    return "\n\n".join(parts)[:4200]
+
+
+def _verify_scene_options(
+    scene: dict[str, Any],
+    options: list[dict[str, Any]],
+    settings: dict[str, Any],
+    context: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Filtra resultados por compatibilidade visual com a fala do bloco."""
+    if not options:
+        report = {"status": "empty", "checked": 0, "accepted": 0, "rejected": 0, "threshold": 68}
+    else:
+        options, report = media_relevance.verify_scene_candidates(
+            scene_text=str(scene.get("text") or ""),
+            visual_description=str(scene.get("visual_description") or ""),
+            context=context,
+            candidates=options,
+            model=settings.get("openrouter_model"),
+            min_score=68,
+        )
+    scene["media_verification"] = report
+    scene["rejected_media_count"] = int(report.get("rejected") or 0)
+    return options, report
+
+
 def analyze_project(pid: str) -> None:
     """Busca opções de mídia para cada cena. No piloto automático, escolhe e já renderiza."""
     if pid in ACTIVE_JOBS:
@@ -167,14 +211,15 @@ def analyze_project(pid: str) -> None:
         if not script_context:
             script_context = " ".join(str(sc.get("text") or "") for sc in scenes)[:2600]
         if os.getenv("OPENROUTER_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip():
-            for scene in scenes:
+            for scene_index, scene in enumerate(scenes):
                 T.check()
                 try:
+                    local_context = _scene_search_context(scenes, scene_index, script_context)
                     plan = scene_planner.gerar_consultas_para_cena(
                         str(scene.get("text") or scene.get("query") or ""),
                         idioma=settings.get("search_lang", "auto"),
                         max_consultas=3,
-                        contexto=script_context,
+                        contexto=local_context,
                         model=settings.get("openrouter_model"),
                     )
                     queries = [str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()]
@@ -197,6 +242,20 @@ def analyze_project(pid: str) -> None:
                 pref=settings["media_pref"], project_id=pid,
                 queries=scene.get("search_queries"), smart=True,
             )
+            local_context = _scene_search_context(scenes, idx, script_context)
+            options, media_report = _verify_scene_options(scene, options, settings, local_context)
+            if media_report.get("status") == "verified":
+                T.log(
+                    f"Conferência visual da cena {idx + 1}: {media_report.get('accepted', 0)} aprovadas; "
+                    f"{media_report.get('rejected', 0)} descartadas pela IA.",
+                    "info" if media_report.get("accepted") else "warn",
+                    stage="search",
+                )
+            elif media_report.get("status") == "unavailable" and media_report.get("message"):
+                warning = "Conferência visual não disponível: " + str(media_report["message"])[:180]
+                if warning not in warnings:
+                    warnings.append(warning)
+                    T.log(warning, "warn", stage="search")
             for m in messages:
                 if m not in warnings:
                     warnings.append(m)
@@ -206,7 +265,7 @@ def analyze_project(pid: str) -> None:
 
             plan_data = {
                 key: scene.get(key) for key in
-                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider")
+                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider", "media_verification", "rejected_media_count")
                 if key in scene
             }
 
@@ -277,6 +336,15 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
                 pref=settings["media_pref"], project_id=pid,
                 queries=scene.get("search_queries"), smart=True,
             )
+            project_context = " ".join(str(item.get("text") or "") for item in state.get("scenes", []))[:2600]
+            options, media_report = _verify_scene_options(scene, options, settings, project_context)
+            if media_report.get("status") == "verified":
+                T.log(
+                    f"Conferência visual: {media_report.get('accepted', 0)} aprovadas; "
+                    f"{media_report.get('rejected', 0)} descartadas.",
+                    "info" if media_report.get("accepted") else "warn",
+                    stage="search",
+                )
             for m in messages:
                 T.log(m, "warn", stage="search")
             total_found += len(options)
@@ -287,6 +355,8 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
                         sc["options"] = opts
                         sc["selected"] = 0
                         sc["status"] = "found" if opts else "empty"
+                        sc["media_verification"] = media_report
+                        sc["rejected_media_count"] = int(media_report.get("rejected") or 0)
                         break
                 s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
             patch_state(pid, save)
@@ -2585,6 +2655,8 @@ def research_scene(project_id: str, scene_id: str, body: SceneSearchBody):
         queries=query_variants(query, settings.get("search_lang", "auto"), settings.get("query_extra", ""), 3)[1:],
         smart=True,
     )
+    project_context = " ".join(str(item.get("text") or "") for item in state.get("scenes", []))[:2600]
+    options, media_report = _verify_scene_options(scene, options, settings, project_context)
     keep = [o for o in scene.get("options", []) if o.get("local_file")]
 
     def fn(s: dict[str, Any]) -> None:
@@ -2593,6 +2665,8 @@ def research_scene(project_id: str, scene_id: str, body: SceneSearchBody):
         sc["options"] = keep + options
         sc["selected"] = 0
         sc["status"] = "found" if (keep or options) else "empty"
+        sc["media_verification"] = media_report
+        sc["rejected_media_count"] = int(media_report.get("rejected") or 0)
         s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
     result = _find_scene(patch_state(project_id, fn), scene_id)
     return {"scene": result, "messages": messages}
