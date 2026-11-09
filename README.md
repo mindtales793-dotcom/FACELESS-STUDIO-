@@ -30,6 +30,12 @@ Defina `APP_PASSWORD` se publicar na internet. Use `DATA_DIR` em disco persisten
 3. O robô busca e pré-escolhe a mídia. Revise as cenas (trocar opção, buscar de novo, enviar arquivo seu, gerar com IA). Com **piloto automático** ele monta direto.
 4. Baixe o MP4 e, se quiser, o pacote do CapCut.
 
+## Fila de montagem e lote
+As montagens entram numa **fila global** e rodam uma por vez (`MAX_CONCURRENT_RENDERS`, padrão 1), para não travar o computador. Quem espera fica em "Montagem na fila" e pode ser cancelado. O piloto automático usa a mesma fila.
+- `POST /api/projects/render-batch` enfileira vários projetos de uma vez (sem corpo = todos os que estão prontos para montar; ou `{"ids": [...]}`) e devolve o que entrou e o que foi ignorado, com o motivo.
+- `GET /api/render-queue` mostra o que está montando e o que espera.
+- Se o servidor cair ou for reiniciado no meio de uma busca ou montagem, ao subir de novo o projeto volta a "pronto" com suas escolhas mantidas (antes ficava preso em "montando").
+
 ## Google Flow e MCP: como funciona de verdade
 O Google Flow **não tem API pública**. Existem MCPs da comunidade que automatizam o site do Flow dentro de um Chrome logado; são frágeis e podem violar os termos do serviço, por isso não os embutimos.
 Aqui usamos os **mesmos modelos pela Gemini API** (`GEMINI_API_KEY`): Nano Banana (imagem) e Veo (vídeo, `FLOW_VIDEO_MODEL`). Consequências: o Veo é **cobrado por segundo** na sua chave, e os clipes **não aparecem no seu projeto do Flow**.

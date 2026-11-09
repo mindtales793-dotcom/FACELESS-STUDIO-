@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -181,7 +184,10 @@ def analyze_project(pid: str) -> None:
         if settings["autopilot"]:
             T.update(stage="review", status="done", detail="Escolha automática (piloto automático)", log="Piloto automático: escolhi a melhor opção de cada cena, sem repetir mídia.")
             ACTIVE_JOBS.discard(pid)
-            render_project(pid)
+            # Entra na fila global em vez de renderizar aqui: com vários projetos em piloto automático,
+            # todos montando ao mesmo tempo travariam o computador.
+            _mark_queued_render(pid)
+            enqueue_render(pid)
             return
         T.update(stage="review", status="waiting", detail="Aguardando você escolher as cenas e iniciar a montagem",
                  overall=100, message="Cenas prontas. Revise e inicie a montagem.", log="Pré-seleção feita. Revise as cenas e clique em Montar vídeo.")
@@ -260,14 +266,139 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
         ACTIVE_JOBS.discard(pid)
 
 
+# ------------------------------------------------------------------ fila global de render
+# Render com FFmpeg é pesado: vários ao mesmo tempo travam um PC comum. Os projetos esperam numa fila
+# (status "queued_render") e MAX_CONCURRENT_RENDERS trabalhadores (padrão 1) montam um de cada vez.
+# Os trabalhadores são threads próprias, para não ocupar o pool que atende as rotas da API.
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, "") or default))
+    except ValueError:
+        return default
+
+
+MAX_CONCURRENT_RENDERS = _env_int("MAX_CONCURRENT_RENDERS", 1)
+_RENDER_QUEUE: queue.Queue[str] = queue.Queue()
+_RENDER_WAITING: list[str] = []
+_RENDER_RUNNING: set[str] = set()
+_RENDER_LOCK = threading.Lock()
+_RENDER_WORKERS_STARTED = False
+
+
 def run_render_job(pid: str) -> None:
+    """Executado pelo trabalhador da fila quando chega a vez do projeto."""
     if pid in ACTIVE_JOBS:
         return
     ACTIVE_JOBS.add(pid)
     try:
+        try:
+            state = read_state(pid)
+        except HTTPException:
+            return  # o projeto foi apagado enquanto esperava na fila
+        if state.get("cancel_requested"):
+            patch_state(pid, lambda s: s.update({"status": "ready", "message": "Montagem cancelada na fila.", "cancel_requested": False}))
+            Tracker(pid).log("Montagem cancelada enquanto esperava na fila.", "warn")
+            return
         render_project(pid)
     finally:
         ACTIVE_JOBS.discard(pid)
+
+
+def _render_worker() -> None:
+    while True:
+        pid = _RENDER_QUEUE.get()
+        with _RENDER_LOCK:
+            if pid in _RENDER_WAITING:
+                _RENDER_WAITING.remove(pid)
+            _RENDER_RUNNING.add(pid)
+        try:
+            run_render_job(pid)
+        except Exception:  # um projeto com erro não pode derrubar o trabalhador e parar a fila
+            logging.getLogger("uvicorn.error").exception("Falha inesperada na fila de render (projeto %s)", pid)
+        finally:
+            with _RENDER_LOCK:
+                _RENDER_RUNNING.discard(pid)
+            _RENDER_QUEUE.task_done()
+
+
+def enqueue_render(pid: str) -> int:
+    """Põe o projeto na fila de montagem e devolve a posição de espera (0 = já está montando)."""
+    global _RENDER_WORKERS_STARTED
+    with _RENDER_LOCK:
+        if not _RENDER_WORKERS_STARTED:
+            for n in range(MAX_CONCURRENT_RENDERS):
+                threading.Thread(target=_render_worker, name=f"render-worker-{n + 1}", daemon=True).start()
+            _RENDER_WORKERS_STARTED = True
+        if pid in _RENDER_RUNNING:
+            return 0
+        if pid in _RENDER_WAITING:
+            return _RENDER_WAITING.index(pid) + 1
+        _RENDER_WAITING.append(pid)
+        position = len(_RENDER_WAITING)
+    _RENDER_QUEUE.put(pid)
+    return position
+
+
+def render_queue_snapshot() -> dict[str, Any]:
+    with _RENDER_LOCK:
+        running, waiting = sorted(_RENDER_RUNNING), list(_RENDER_WAITING)
+
+    def describe(pid: str) -> dict[str, Any]:
+        try:
+            return {"id": pid, "title": read_state(pid).get("title")}
+        except HTTPException:
+            return {"id": pid, "title": None}
+    return {"max_concurrent": MAX_CONCURRENT_RENDERS, "running": [describe(p) for p in running], "waiting": [describe(p) for p in waiting]}
+
+
+def _mark_queued_render(pid: str) -> None:
+    patch_state(pid, lambda s: s.update({"status": "queued_render", "progress": 0, "message": "Montagem na fila...", "error": None,
+                                         "cancel_requested": False, "settings_changed_after_render": False}))
+
+
+def queue_project_render(project_id: str) -> int:
+    """Valida o projeto e o coloca na fila de montagem. Levanta HTTPException se não puder."""
+    state = read_state(project_id)
+    if project_id in ACTIVE_JOBS or state.get("status") in ("rendering", "queued_render"):
+        raise HTTPException(status_code=409, detail="Este projeto já está sendo montado.")
+    if state.get("status") == "searching":
+        raise HTTPException(status_code=409, detail="A busca de mídia ainda está em andamento.")
+    if not any(s.get("options") for s in state.get("scenes", [])):
+        raise HTTPException(status_code=400, detail="Nenhuma cena tem mídia. Ajuste as fontes e busque de novo, ou envie seus próprios arquivos.")
+    _mark_queued_render(project_id)
+    return enqueue_render(project_id)
+
+
+def recover_interrupted_projects() -> int:
+    """No arranque do servidor nada está rodando. Projetos que ficaram presos em busca/montagem/CapCut
+    (porque o servidor caiu ou foi reiniciado) voltam a "ready", com as escolhas mantidas, como no cancelamento."""
+    busy = ("queued", "searching", "rendering", "queued_render")
+    fixed = 0
+    for folder in DATA_DIR.iterdir():
+        if not (folder.is_dir() and re.fullmatch(r"[a-f0-9]{32}", folder.name)):
+            continue
+        try:
+            state = read_state(folder.name)
+        except Exception:
+            continue
+        if state.get("status") not in busy and (state.get("capcut") or {}).get("status") != "building":
+            continue
+
+        def fix(s: dict[str, Any]) -> None:
+            if s.get("status") in busy:
+                s["status"] = "ready"
+                s["message"] = "Interrompido porque o servidor foi reiniciado. Suas escolhas foram mantidas; busque ou monte de novo."
+                s["cancel_requested"] = False
+                for st in s.get("stages", {}).values():
+                    if st.get("status") == "running":
+                        st["status"] = "pending"
+            if (s.get("capcut") or {}).get("status") == "building":
+                s["capcut"] = {"status": "none"}
+            s["updated_at"] = now_iso()
+        patch_state(folder.name, fix)
+        Tracker(folder.name).log("O servidor foi reiniciado durante esta etapa; o projeto voltou ao estado anterior.", "warn")
+        fixed += 1
+    return fixed
 
 
 def run_capcut_job(pid: str) -> None:
@@ -1679,6 +1810,16 @@ async def health_narration_proxy():
     return await nar_proxy.get_narration_health_proxy()
 
 
+@app.on_event("startup")
+def _recover_on_startup() -> None:
+    try:
+        n = recover_interrupted_projects()
+        if n:
+            logging.getLogger("uvicorn.error").warning("%d projeto(s) interrompido(s) por reinício foram recuperados.", n)
+    except Exception:  # a recuperação nunca pode impedir o servidor de subir
+        logging.getLogger("uvicorn.error").exception("Falha ao recuperar projetos interrompidos")
+
+
 @app.on_event("shutdown")
 async def shutdown_narration_proxy():
     await nar_proxy.close_client()
@@ -2655,20 +2796,47 @@ async def scenes_buscar_cadeia(project_id: str, body: SceneSearchBody):
 
 
 @app.post("/api/projects/{project_id}/render")
-def start_render(project_id: str, background_tasks: BackgroundTasks):
-    state = read_state(project_id)
-    if project_id in ACTIVE_JOBS or state.get("status") in ("rendering", "queued_render"):
-        raise HTTPException(status_code=409, detail="Este projeto já está sendo montado.")
-    if state.get("status") == "searching":
-        raise HTTPException(status_code=409, detail="A busca de mídia ainda está em andamento.")
-    if not any(s.get("options") for s in state.get("scenes", [])):
-        raise HTTPException(status_code=400, detail="Nenhuma cena tem mídia. Ajuste as fontes e busque de novo, ou envie seus próprios arquivos.")
+def start_render(project_id: str):
+    position = queue_project_render(project_id)
+    return {"ok": True, "status": "queued_render", "queue_position": position}
 
-    def fn(s: dict[str, Any]) -> None:
-        s.update({"status": "queued_render", "progress": 0, "message": "Montagem na fila...", "error": None, "cancel_requested": False, "settings_changed_after_render": False})
-    patch_state(project_id, fn)
-    background_tasks.add_task(run_render_job, project_id)
-    return {"ok": True, "status": "queued_render"}
+
+class RenderBatchBody(BaseModel):
+    ids: list[str] | None = None  # vazio = todos os projetos prontos para montar
+
+
+@app.post("/api/projects/render-batch")
+def render_batch(body: RenderBatchBody | None = None):
+    """Coloca vários projetos na fila de montagem de uma vez (a fila roda um por vez, do mais antigo ao mais novo).
+
+    Sem `ids`, enfileira todos os projetos com status "ready" que já têm mídia nas cenas.
+    """
+    ids = list(dict.fromkeys(body.ids)) if body and body.ids else None
+    if ids is None:
+        ready: list[tuple[str, str]] = []
+        for folder in DATA_DIR.iterdir():
+            if folder.is_dir() and re.fullmatch(r"[a-f0-9]{32}", folder.name):
+                try:
+                    st = read_state(folder.name)
+                except Exception:
+                    continue
+                if st.get("status") == "ready":
+                    ready.append((st.get("created_at") or "", folder.name))
+        ids = [pid for _, pid in sorted(ready)]
+    queued: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for pid in ids:
+        try:
+            queued.append({"id": pid, "queue_position": queue_project_render(pid)})
+        except HTTPException as exc:
+            skipped.append({"id": pid, "reason": exc.detail})
+    return {"ok": True, "queued": queued, "skipped": skipped}
+
+
+@app.get("/api/render-queue")
+def render_queue():
+    """O que está montando agora e o que espera na fila."""
+    return render_queue_snapshot()
 
 
 @app.post("/api/projects/{project_id}/cancel")

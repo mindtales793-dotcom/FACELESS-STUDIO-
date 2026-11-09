@@ -145,3 +145,105 @@ def test_merge_audio_insere_pausas(tmp_path):
         [shutil.which("ffprobe") or "ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=nw=1:nk=1", str(saida)], capture_output=True, text=True).stdout.strip())
     assert dur > 2.2  # 2 s de áudio + 0,3 s de pausa (antes a pausa nunca era criada: ~2,0 s)
+
+
+# ------------------------------------------------------------------ fila de render, lote e recuperação
+import threading  # noqa: E402
+import time  # noqa: E402
+import uuid  # noqa: E402
+
+
+def _novo_projeto(status="ready", com_midia=True, **extra) -> str:
+    pid = uuid.uuid4().hex
+    (Path(_TMP) / pid).mkdir()
+    state = {"id": pid, "title": f"proj {pid[:4]}", "status": status, "created_at": f"2026-01-01T00:00:{len(os.listdir(_TMP)):02d}",
+             "scenes": [{"options": [{"url": "x"}]}] if com_midia else [{"options": []}], "stages": {}, "log": []}
+    state.update(extra)
+    main.write_state(pid, state)
+    return pid
+
+
+def _status(pid: str) -> str:
+    return main.read_state(pid)["status"]
+
+
+def _esperar(cond, timeout=8.0):
+    fim = time.time() + timeout
+    while time.time() < fim:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_recupera_projetos_interrompidos_no_reinicio():
+    # Antes: o projeto ficava "rendering"/"searching" para sempre (ACTIVE_JOBS é só memória).
+    busca = _novo_projeto("searching")
+    montando = _novo_projeto("rendering", stages={"join": {"label": "j", "status": "running"}})
+    capcut = _novo_projeto("complete", capcut={"status": "building"})
+    pronto = _novo_projeto("ready")
+    completo = _novo_projeto("complete")
+    assert main.recover_interrupted_projects() >= 3
+    assert _status(busca) == "ready" and _status(montando) == "ready"
+    assert main.read_state(montando)["stages"]["join"]["status"] == "pending"
+    assert main.read_state(capcut)["capcut"] == {"status": "none"} and _status(capcut) == "complete"
+    assert _status(pronto) == "ready" and _status(completo) == "complete"
+
+
+def test_fila_monta_um_projeto_por_vez_e_em_ordem(client, monkeypatch):
+    ativos, pico, ordem = [0], [0], []
+    lock = threading.Lock()
+
+    def render_falso(pid):
+        with lock:
+            ativos[0] += 1
+            pico[0] = max(pico[0], ativos[0])
+            ordem.append(pid)
+        time.sleep(0.05)
+        main.patch_state(pid, lambda s: s.update({"status": "complete"}))
+        with lock:
+            ativos[0] -= 1
+
+    monkeypatch.setattr(main, "render_project", render_falso)
+    ids = [_novo_projeto() for _ in range(3)]
+    for pid in ids:
+        r = client.post(f"/api/projects/{pid}/render")
+        assert r.status_code == 200 and r.json()["status"] == "queued_render"
+    assert _esperar(lambda: all(_status(p) == "complete" for p in ids))
+    assert pico[0] == 1          # nunca dois renders ao mesmo tempo
+    assert ordem == ids          # primeiro a entrar, primeiro a montar
+
+
+def test_cancelar_projeto_que_espera_na_fila(client, monkeypatch):
+    liberar, chamados = threading.Event(), []
+
+    def render_falso(pid):
+        chamados.append(pid)
+        liberar.wait(5)
+        main.patch_state(pid, lambda s: s.update({"status": "complete"}))
+
+    monkeypatch.setattr(main, "render_project", render_falso)
+    primeiro, segundo = _novo_projeto(), _novo_projeto()
+    client.post(f"/api/projects/{primeiro}/render")
+    assert _esperar(lambda: primeiro in chamados)
+    client.post(f"/api/projects/{segundo}/render")
+    assert client.get("/api/render-queue").json()["waiting"][0]["id"] == segundo
+    assert client.post(f"/api/projects/{segundo}/cancel").status_code == 200
+    liberar.set()
+    assert _esperar(lambda: _status(segundo) == "ready" and _status(primeiro) == "complete")
+    assert chamados == [primeiro]  # o cancelado nunca chegou a renderizar
+
+
+def test_render_em_lote_enfileira_prontos_e_explica_os_ignorados(client, monkeypatch):
+    monkeypatch.setattr(main, "render_project", lambda pid: main.patch_state(pid, lambda s: s.update({"status": "complete"})))
+    for p in Path(_TMP).iterdir():  # isola de projetos de outros testes
+        shutil.rmtree(p, ignore_errors=True)
+    a, b = _novo_projeto(), _novo_projeto()
+    sem_midia = _novo_projeto(com_midia=False)
+    r = client.post("/api/projects/render-batch").json()
+    assert [q["id"] for q in r["queued"]] == [a, b]
+    assert [s["id"] for s in r["skipped"]] == [sem_midia]
+    assert _esperar(lambda: _status(a) == "complete" and _status(b) == "complete")
+    # ids explícitos: um projeto já montado é aceito de novo? não, só "ready" entra; aqui forçamos um inexistente
+    r2 = client.post("/api/projects/render-batch", json={"ids": [sem_midia]}).json()
+    assert r2["queued"] == [] and len(r2["skipped"]) == 1
