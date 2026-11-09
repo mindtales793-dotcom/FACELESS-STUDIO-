@@ -480,3 +480,16 @@ details.fold .fold-body{padding:18px}
 .chip.ok{color:var(--green);border-color:rgba(95,217,160,.35)}
 .chip.warn{color:var(--amber);border-color:rgba(242,180,92,.35)}
 @media(max-width:760px){.storyblocks-search-form{display:grid;grid-template-columns:1fr 1fr}.storyblocks-search-form .field:first-child{grid-column:1/-1}.storyblocks-search-form button{grid-column:1/-1}}
+
+
+/* Diagnóstico local */
+.doctor-results{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:9px;margin-top:12px}
+.doctor-check{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:rgba(10,18,34,.55);min-width:0}
+.doctor-check-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.doctor-check-head b{font-size:12px;color:var(--text)}
+.doctor-check p{font-size:11px;line-height:1.45;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
+.doctor-state{font:700 9px var(--mono);letter-spacing:.06em}
+.doctor-check.status-ok .doctor-state{color:var(--green)}
+.doctor-check.status-warning .doctor-state{color:var(--amber)}
+.doctor-check.status-error .doctor-state{color:#ff788d}
+@media(max-width:760px){.doctor-results{grid-template-columns:1fr}}

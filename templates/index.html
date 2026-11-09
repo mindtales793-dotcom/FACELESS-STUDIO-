@@ -794,6 +794,17 @@ Ancient biblical desert temple caravan under a star-filled night sky"></textarea
           <b>Segurança e persistência:</b> As chaves são salvas no arquivo <code>.env</code> local do projeto e carregadas em tempo de execução. Chaves de exemplo como <code>sua_chave_...</code> são identificadas e não causam erros de autenticação nas buscas.
         </div>
 
+        <div class="card doctor-card" style="margin-bottom:18px">
+          <div class="card-title">
+            <div><h3>Diagnóstico do sistema</h3><p>Verifica Python, dependências, FFmpeg, FFprobe, Node.js, Remotion e pasta de dados. Não exibe suas chaves.</p></div>
+            <div class="row" style="align-items:center">
+              <span class="chip" id="doctorStatus">Ainda não executado</span>
+              <button type="button" class="btn ghost small" id="runSystemDoctorBtn"><i data-ic="refresh"></i> Executar diagnóstico</button>
+            </div>
+          </div>
+          <p class="hint" id="doctorSummary">Use esta verificação quando o estúdio não abrir, não encontrar o FFmpeg ou apresentar erro na montagem.</p>
+          <div class="doctor-results" id="doctorResults" aria-live="polite"></div>
+        </div>
         <div class="project-grid" id="keysCardsGrid" style="grid-template-columns:repeat(auto-fill,minmax(330px,1fr))"></div>
       </section>
 

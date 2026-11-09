@@ -24,6 +24,10 @@ python -m uvicorn main:app --port 3000
 Docker: `docker build -t fcs . && docker run -p 3000:3000 --env-file .env -v $PWD/data:/app/data fcs`.
 Defina `APP_PASSWORD` se publicar na internet. Use `DATA_DIR` em disco persistente.
 
+## Diagnóstico do sistema
+
+Na aba **Chaves de API & Conexões**, clique em **Executar diagnóstico** para conferir Python, dependências, FFmpeg, FFprobe, Node.js, Remotion, espaço em disco e pasta de dados. O diagnóstico é local, não instala nada e nunca exibe o conteúdo das chaves de API. Avisos de Node/Remotion só afetam a renderização de cenas animadas; FFmpeg/FFprobe são necessários para montagem de vídeo.
+
 ## Remotion real (renderização de cenas animadas)
 
 O render de cenas usa o Remotion de verdade (React + Chromium), não um fundo estático gerado pelo FFmpeg.

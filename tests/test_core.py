@@ -467,3 +467,16 @@ def test_openrouter_modelos_exige_chave(client, monkeypatch):
     response = client.get("/api/openrouter/models")
     assert response.status_code == 400
     assert "OPENROUTER_API_KEY" in response.json()["detail"]
+
+def test_diagnostico_api_nao_expoe_chaves(client, monkeypatch):
+    import doctor
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "chave-super-secreta-de-teste")
+    response = client.get("/api/doctor")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "checks" in payload and "counts" in payload
+    assert isinstance(payload["checks"], list)
+    assert "chave-super-secreta-de-teste" not in response.text
+    assert all("detail" in item and "status" in item for item in payload["checks"])
+

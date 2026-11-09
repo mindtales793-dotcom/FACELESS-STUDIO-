@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+import doctor
 import flow
 import groq_transcribe
 import ia_scenes
@@ -824,6 +825,12 @@ def health():
 
 
 # ------------------------------------------------------------------ chaves de API
+@app.get("/api/doctor")
+def system_diagnostics():
+    """Verifica dependências locais sem mostrar ou transmitir segredos."""
+    return doctor.run_diagnostics()
+
+
 @app.get("/api/keys")
 def get_keys():
     return {"keys": keys_mgr.get_all_keys_status()}
