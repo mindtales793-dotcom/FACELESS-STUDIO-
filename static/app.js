@@ -1077,12 +1077,46 @@ const isWorking = s => ['queued', 'searching', 'queued_render', 'rendering'].inc
 const badgeCls = s => (isWorking(s) ? 'work' : s === 'ready' ? 'ready' : s === 'complete' ? 'complete' : s === 'failed' ? 'failed' : '');
 async function loadProjects() {
   try { S.projects = await api('/api/projects'); } catch { return; }
-  $('#projectCount').textContent = S.projects.length; renderProjects();
+  try { S.renderQueue = await api('/api/render-queue'); } catch { S.renderQueue = { running: [], waiting: [] }; }
+  $('#projectCount').textContent = S.projects.length; renderProjects(); renderQueueBar(); scheduleQueueRefresh();
 }
+// Fila de montagem: lista o que está montando e o que espera, e deixa cancelar quem espera.
+const queuePos = id => ((S.renderQueue || {}).waiting || []).findIndex(w => w.id === id) + 1;
+function renderQueueBar() {
+  const bar = $('#renderQueue'); if (!bar) return;
+  const q = S.renderQueue || { running: [], waiting: [] };
+  if (!q.running.length && !q.waiting.length) { bar.hidden = true; bar.innerHTML = ''; return; }
+  const item = (w, i) => `<li><span class="chip">${i === null ? 'MONTANDO' : '#' + (i + 1)}</span><span class="qt">${esc(w.title || 'Projeto')}</span>${i === null ? '' : `<button class="text-btn" data-qcancel="${w.id}" title="Tirar da fila">Cancelar</button>`}</li>`;
+  bar.innerHTML = `<div class="spread"><b>Fila de montagem</b><small>${q.running.length} montando · ${q.waiting.length} esperando · ${q.max_concurrent || 1} por vez</small></div><ul>${q.running.map(w => item(w, null)).join('')}${q.waiting.map(item).join('')}</ul>`;
+  bar.hidden = false;
+}
+// Enquanto houver algo na fila (ou projetos em andamento) e a lista estiver aberta, atualiza sozinha.
+function scheduleQueueRefresh() {
+  clearTimeout(scheduleQueueRefresh.t);
+  const q = S.renderQueue || { running: [], waiting: [] };
+  const active = q.running.length || q.waiting.length || S.projects.some(p => isWorking(p.status));
+  if (active) scheduleQueueRefresh.t = setTimeout(() => { const v = $('#viewProjects'); if (v && !v.hidden) loadProjects(); else scheduleQueueRefresh(); }, 3000);
+}
+$('#renderQueue').addEventListener('click', async e => {
+  const b = e.target.closest('[data-qcancel]'); if (!b) return;
+  try { await api(`/api/projects/${b.dataset.qcancel}/cancel`, { method: 'POST' }); toast('Tirado da fila.'); } catch (err) { toast(err.message); }
+  loadProjects();
+});
+$('#renderAllReady').onclick = async () => {
+  const ready = S.projects.filter(p => p.status === 'ready').length;
+  if (!ready) { toast('Nenhum projeto está pronto para montar.'); return; }
+  if (!confirm(`Colocar ${ready} projeto(s) na fila de montagem? Eles montam um por vez.`)) return;
+  try {
+    const r = await jpost('/api/projects/render-batch', {});
+    const skipped = r.skipped.length ? ` ${r.skipped.length} ignorado(s): ${r.skipped.map(s => s.reason).filter((v, i, a) => a.indexOf(v) === i).join(' ')}` : '';
+    toast(`${r.queued.length} projeto(s) na fila.${skipped}`);
+  } catch (err) { toast(err.message); }
+  loadProjects();
+};
 function renderProjects() {
   const host = $('#projectList');
   if (!S.projects.length) { host.innerHTML = `<div class="empty" style="grid-column:1/-1"><b>Nenhum projeto ainda</b>Crie o primeiro em "Novo vídeo".</div>`; return; }
-  host.innerHTML = S.projects.map(p => `<article class="pcard" data-open="${p.id}"><div class="spread"><span class="badge ${badgeCls(p.status)}">${STATUS[p.status] || 'PROCESSANDO'}</span><button class="icon-btn" data-del="${p.id}" title="Apagar">${ic('trash')}</button></div><h3>${esc(p.title)}</h3><div class="meta"><span class="chip">${esc(p.ratio || '16:9')}</span>${p.template ? `<span class="chip">${esc((S.catalog.templates.find(t => t.id === p.template) || {}).name || p.template)}</span>` : ''}<span class="chip">${p.scenes || 0} cenas</span>${p.duration ? `<span class="chip">${fmtTime(p.duration)}</span>` : ''}</div><div class="track"><div style="width:${Math.min(100, p.progress || 0)}%"></div></div><div class="foot"><small>${new Date(p.created_at).toLocaleString('pt-BR')}</small><small>${esc(((p.status === 'complete' ? 'Vídeo pronto para assistir e baixar' : p.status === 'failed' ? (p.error || p.message || 'Falhou.') : (p.message || '')) || '').slice(0, 44))}</small></div></article>`).join('');
+  host.innerHTML = S.projects.map(p => `<article class="pcard" data-open="${p.id}"><div class="spread"><span class="badge ${badgeCls(p.status)}">${(STATUS[p.status] || 'PROCESSANDO') + (p.status === 'queued_render' && queuePos(p.id) ? ' · #' + queuePos(p.id) : '')}</span><button class="icon-btn" data-del="${p.id}" title="Apagar">${ic('trash')}</button></div><h3>${esc(p.title)}</h3><div class="meta"><span class="chip">${esc(p.ratio || '16:9')}</span>${p.template ? `<span class="chip">${esc((S.catalog.templates.find(t => t.id === p.template) || {}).name || p.template)}</span>` : ''}<span class="chip">${p.scenes || 0} cenas</span>${p.duration ? `<span class="chip">${fmtTime(p.duration)}</span>` : ''}</div><div class="track"><div style="width:${Math.min(100, p.progress || 0)}%"></div></div><div class="foot"><small>${new Date(p.created_at).toLocaleString('pt-BR')}</small><small>${esc(((p.status === 'complete' ? 'Vídeo pronto para assistir e baixar' : p.status === 'failed' ? (p.error || p.message || 'Falhou.') : (p.message || '')) || '').slice(0, 44))}</small></div></article>`).join('');
 }
 $('#projectList').addEventListener('click', async e => {
   const del = e.target.closest('[data-del]');

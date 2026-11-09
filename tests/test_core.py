@@ -229,6 +229,8 @@ def test_cancelar_projeto_que_espera_na_fila(client, monkeypatch):
     client.post(f"/api/projects/{segundo}/render")
     assert client.get("/api/render-queue").json()["waiting"][0]["id"] == segundo
     assert client.post(f"/api/projects/{segundo}/cancel").status_code == 200
+    # sai da fila na hora, sem esperar o render que está na frente terminar
+    assert _status(segundo) == "ready" and client.get("/api/render-queue").json()["waiting"] == []
     liberar.set()
     assert _esperar(lambda: _status(segundo) == "ready" and _status(primeiro) == "complete")
     assert chamados == [primeiro]  # o cancelado nunca chegou a renderizar

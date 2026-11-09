@@ -308,8 +308,10 @@ def _render_worker() -> None:
     while True:
         pid = _RENDER_QUEUE.get()
         with _RENDER_LOCK:
-            if pid in _RENDER_WAITING:
-                _RENDER_WAITING.remove(pid)
+            if pid not in _RENDER_WAITING:  # foi tirado da fila (cancelado) ou já está montando
+                _RENDER_QUEUE.task_done()
+                continue
+            _RENDER_WAITING.remove(pid)
             _RENDER_RUNNING.add(pid)
         try:
             run_render_job(pid)
@@ -337,6 +339,15 @@ def enqueue_render(pid: str) -> int:
         position = len(_RENDER_WAITING)
     _RENDER_QUEUE.put(pid)
     return position
+
+
+def dequeue_render(pid: str) -> bool:
+    """Tira da fila um projeto que ainda espera a vez. Devolve False se ele não estava esperando."""
+    with _RENDER_LOCK:
+        if pid not in _RENDER_WAITING:
+            return False
+        _RENDER_WAITING.remove(pid)
+        return True
 
 
 def render_queue_snapshot() -> dict[str, Any]:
@@ -2844,6 +2855,10 @@ def cancel_job(project_id: str):
     state = read_state(project_id)
     if state.get("status") not in ("rendering", "queued_render", "searching") and project_id not in ACTIVE_JOBS:
         raise HTTPException(status_code=409, detail="Nada em andamento para cancelar.")
+    if dequeue_render(project_id):  # ainda esperando: sai da fila agora, sem esperar a vez dele
+        patch_state(project_id, lambda s: s.update({"status": "ready", "message": "Montagem cancelada na fila.", "cancel_requested": False}))
+        Tracker(project_id).log("Montagem cancelada enquanto esperava na fila.", "warn")
+        return {"ok": True}
     patch_state(project_id, lambda s: s.update({"cancel_requested": True}))
     return {"ok": True}
 

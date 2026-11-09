@@ -52,8 +52,12 @@
       <section id="viewProjects" class="view" hidden>
         <header class="page-head">
           <div><div class="eyebrow">BIBLIOTECA</div><h1>Seus projetos</h1><p>Abra um projeto para ver o que o robô fez, revisar as cenas, baixar o MP4 ou exportar para o CapCut.</p></div>
-          <button class="btn ghost" id="refreshProjects"><i data-ic="refresh"></i> Atualizar</button>
+          <div class="row">
+            <button class="btn primary" id="renderAllReady" title="Coloca na fila todos os projetos prontos para montar"><i data-ic="bot"></i> Montar todos prontos</button>
+            <button class="btn ghost" id="refreshProjects"><i data-ic="refresh"></i> Atualizar</button>
+          </div>
         </header>
+        <div class="queue-bar" id="renderQueue" hidden></div>
         <div class="project-grid" id="projectList"></div>
       </section>
 

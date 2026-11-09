@@ -462,3 +462,10 @@ details.fold .fold-body{padding:18px}
   .log-line{grid-template-columns:54px 1fr}.log-line em{display:none}
   .scene-grid,.project-grid{grid-template-columns:1fr}
 }
+
+/* fila de montagem (lista de projetos) */
+.queue-bar{border:1px solid var(--line2);border-radius:12px;padding:13px 16px;margin-bottom:18px;background:rgba(19,29,52,.55)}
+.queue-bar small{color:var(--muted);font:12px var(--mono)}
+.queue-bar ul{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
+.queue-bar li{display:flex;align-items:center;gap:10px}
+.queue-bar .qt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
