@@ -2340,7 +2340,7 @@ $('#saveAllKeysBtn')?.addEventListener('click', () => {
 });
 
 $('#testAllKeysBtn')?.addEventListener('click', async () => {
-  const btns = $('#keysCardsGrid .test-key-btn').filter(btn => btn.dataset.keyId !== 'storyblocks_secret');
+  const btns = $$('#keysCardsGrid .test-key-btn').filter(btn => btn.dataset.keyId !== 'storyblocks_secret');
   for (const btn of btns) {
     await testSingleKey(btn.dataset.keyId, btn);
   }
