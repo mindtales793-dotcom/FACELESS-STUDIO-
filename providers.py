@@ -38,6 +38,8 @@ def public_sources() -> list[dict[str, Any]]:
     out = []
     for s in SOURCES:
         ready = True if not s["env"] else is_active_key(os.getenv(s["env"], ""))
+        if s["provider"] == "Storyblocks":
+            ready = ready and is_active_key(os.getenv("STORYBLOCKS_API_SECRET", ""))
         out.append({**s, "ready": ready, "needs_key": bool(s["env"])})
     return out
 
