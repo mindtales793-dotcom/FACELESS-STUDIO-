@@ -333,6 +333,13 @@ class KeyTestBody(BaseModel):
     key_id: str
     key_value: str | None = None
 
+class StoryblocksSearchBody(BaseModel):
+    query: str
+    media_type: str = "video"
+    orientation: str = "landscape"
+    per: int = 12
+    project_id: str | None = None
+
 
 class YouTubeSearchBody(BaseModel):
     query: str
@@ -622,6 +629,33 @@ def save_keys(body: KeysUpdateBody):
 @app.post("/api/keys/test")
 def test_key(body: KeyTestBody):
     return keys_mgr.test_provider_key(body.key_id, body.key_value)
+
+
+@app.post("/api/storyblocks/search")
+def storyblocks_search_route(body: StoryblocksSearchBody):
+    """Busca mídia no Storyblocks sem expor credenciais ao navegador."""
+    query = " ".join((body.query or "").split())[:180]
+    if len(query) < 2:
+        raise HTTPException(status_code=400, detail="Digite pelo menos dois caracteres para pesquisar.")
+    media_type = "image" if body.media_type == "image" else "video"
+    orientation = body.orientation if body.orientation in ("landscape", "portrait", "square") else "landscape"
+    per = max(1, min(24, int(body.per or 12)))
+    try:
+        api_key = os.getenv("STORYBLOCKS_API_KEY", "").strip()
+        api_secret = os.getenv("STORYBLOCKS_API_SECRET", "").strip()
+        if not keys_mgr.is_active_key(api_key) or not keys_mgr.is_active_key(api_secret):
+            raise HTTPException(status_code=400, detail="Configure a API Key e a Secret Key do Storyblocks em Chaves de API.")
+        results = storyblocks_mgr.storyblocks_search(
+            query, api_key, media_type, per, orientation,
+            api_secret=api_secret,
+            project_id=body.project_id or "faceless-media-library",
+            user_id="faceless-local-user",
+        )
+        return {"results": results, "total": len(results), "query": query, "media_type": media_type}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Falha na busca Storyblocks: {str(exc)[:240]}")
 
 
 # ------------------------------------------------------------------ YouTube
