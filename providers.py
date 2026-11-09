@@ -440,15 +440,15 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
                 if source == "youtube_video":
                     options.extend(found)
                 else:
-                    # Apenas miniaturas públicas. Não baixa o vídeo nem presume licença de reutilização.
+                    # A opção está desligada por padrão; o renderizador extrai um quadro de até 10 s do vídeo autorizado.
                     for item in found:
                         thumb = item.get("thumbnail")
                         if not thumb:
                             continue
                         options.append({
                             **item,
-                            "id": f"{item.get('id', 'yt')}_thumbnail",
-                            "provider": "YouTube · miniatura",
+                            "id": f"{item.get('id', 'yt')}_frame",
+                            "provider": "YouTube · quadro",
                             "media_type": "image",
                             "download_url": item.get("download_url") or item.get("source_url") or "",
                             "thumbnail": thumb,
