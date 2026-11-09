@@ -18,6 +18,7 @@ function deepMerge(a, b) {
   return out;
 }
 const fmtTime = s => { s = Math.max(0, Math.floor(Number(s) || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${m}:${String(x).padStart(2, '0')}`; };
+const fmtAudioTime = s => { const n = Number(s); return Number.isFinite(n) && n > 0 ? fmtTime(Math.max(1, Math.round(n))) : 'Duração não detectada'; };
 const clock = iso => { try { return new Date(iso).toLocaleTimeString('pt-BR', { hour12: false }); } catch { return ''; } };
 
 /* ---------- ícones */
@@ -704,7 +705,7 @@ function renderVoice() {
     ? `<span class="spin"></span> ${paused ? 'Pausado' : 'Gerando…'}`
     : `${ic('spark')} ${failed ? 'Tentar de novo' : 'Gerar narração MP3'}`;
   if (failed) $e('fishStatus').textContent = j.error || j.message || 'A geração falhou.';
-  if (done) $e('fishStatus').textContent = `Áudio pronto · ${fmtTime(j.duration)} · MP3 completo disponível para reprodução e download.`;
+  if (done) $e('fishStatus').textContent = `Áudio pronto · ${fmtAudioTime(j.duration)} · MP3 completo disponível para reprodução e download.`;
   if (paused) $e('fishStatus').textContent = 'Narração pausada. Clique em Retomar para continuar.';
 }
 document.addEventListener('input', e => {
