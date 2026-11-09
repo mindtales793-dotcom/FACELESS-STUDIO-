@@ -81,6 +81,30 @@ def _fetch_option(folder: Path, option: dict[str, Any]) -> Path:
     if dest.exists() and dest.stat().st_size > 0:
         return dest
     import os
+    if option.get("frame_from_video"):
+        # Extrai somente um quadro de um trecho limitado a dez segundos.
+        # A fonte YouTube é opcional e deve ser usada apenas com autorização.
+        import youtube_mgr
+        video_temp = media_dir / f"ytframe_{hashlib.sha1(url.encode()).hexdigest()[:16]}.mp4"
+        ffmpeg = ffmpeg_path()
+        try:
+            youtube_mgr.download_youtube_video(url, video_temp, max_duration=10)
+            duration = float(media_duration(video_temp) or 0)
+            if duration <= 0:
+                raise RuntimeError("Não foi possível detectar a duração do trecho do YouTube.")
+            if not ffmpeg or not Path(ffmpeg).exists():
+                raise RuntimeError("FFmpeg é necessário para extrair o quadro do vídeo.")
+            timestamp = min(9.0, max(0.1, duration / 2))
+            subprocess.run(
+                [str(ffmpeg), "-y", "-ss", f"{timestamp:.3f}", "-i", str(video_temp),
+                 "-frames:v", "1", "-vf", "scale=1280:-2", "-q:v", "2", str(dest)],
+                capture_output=True, text=True, timeout=90, check=True,
+            )
+            if not dest.exists() or dest.stat().st_size < 1024:
+                raise RuntimeError("O FFmpeg não conseguiu salvar o quadro extraído.")
+            return dest
+        finally:
+            video_temp.unlink(missing_ok=True)
     if option.get("provider") == "YouTube" or "youtube.com" in url or "youtu.be" in url:
         import youtube_mgr
         youtube_mgr.download_youtube_video(url, dest)
