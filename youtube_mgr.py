@@ -170,7 +170,7 @@ def youtube_search(query: str, per: int = 4, orientation: str = "landscape") -> 
                     "thumbnail": thumb,
                     "source_url": f"https://www.youtube.com/watch?v={vid}",
                     "photographer": channel[:80],
-                    "license": "YouTube (Fair Use / Creative Commons)",
+                    "license": "YouTube · direitos de reutilização não verificados",
                     "width": 1280 if orientation != "portrait" else 720,
                     "height": 720 if orientation != "portrait" else 1280,
                     "duration": round(duration, 1) if duration else None,
