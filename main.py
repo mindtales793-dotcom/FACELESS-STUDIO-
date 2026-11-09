@@ -203,8 +203,15 @@ def analyze_project(pid: str) -> None:
             scene_options = keep + options
             total_found += len(options)
 
-            def save(s: dict[str, Any], i=idx, opts=scene_options) -> None:
+            plan_data = {
+                key: scene.get(key) for key in
+                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider")
+                if key in scene
+            }
+
+            def save(s: dict[str, Any], i=idx, opts=scene_options, plan=plan_data) -> None:
                 sc = s["scenes"][i]
+                sc.update(plan)
                 sc["options"] = opts
                 sc["selected"] = 0
                 sc["status"] = "found" if opts else "empty"
@@ -291,7 +298,7 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
                  log=f"Busca de cenas vazias: {total_found} opções" + (f"; {still_empty} ainda sem resultado" if still_empty else " – todas preenchidas!") + ".",
                  level="warn" if still_empty else "info")
         def pick(s: dict[str, Any]) -> None:
-            auto_pick(s["scenes"], settings["media_pref"], settings["ratio"])
+            auto_pick(s["scenes"], settings["media_pref"], settings["ratio"], settings.get("video_percent", 50))
             s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
         patch_state(pid, pick)
         patch_state(pid, lambda s: s.update({"status": "ready"}))
@@ -2723,7 +2730,7 @@ def auto_pick_route(project_id: str):
         raise HTTPException(status_code=409, detail="Aguarde o robô terminar a etapa atual.")
 
     def fn(s: dict[str, Any]) -> None:
-        auto_pick(s["scenes"], s["settings"]["media_pref"], s["settings"]["ratio"])
+        auto_pick(s["scenes"], s["settings"]["media_pref"], s["settings"]["ratio"], s["settings"].get("video_percent", 50))
         s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
     patch_state(project_id, fn)
     return {"ok": True}
