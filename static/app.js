@@ -111,10 +111,11 @@ const effStyle = cfg => deepMerge(tplById(cfg.template).style, cfg.style || {});
 function defaultCfg() {
   const src = S.catalog.sources;
   const keyed = src.filter(s => s.needs_key && s.ready).map(s => s.id);
-  const sources = keyed.length ? keyed : src.filter(s => !s.needs_key).map(s => s.id);
+  const sources = keyed.length ? keyed : src.filter(s => !s.needs_key && s.id !== 'youtube_frame').map(s => s.id);
   const t = S.catalog.templates[0];
   return {
-    ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', per_source: 3, pacing: t.pacing, search_lang: 'auto', query_extra: '',
+    ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', video_percent: 50, max_video_seconds: 10,
+    openrouter_model: 'google/gemini-2.5-flash', per_source: 3, pacing: t.pacing, search_lang: 'auto', query_extra: '',
     template: t.id, style: {}, autopilot: false, auto_capcut: false,
     audio: { music_id: null, music_volume: t.audio.music_volume, narration_volume: 1, ducking: true, duck_level: 'medium', fade_in: 2, fade_out: 3, loop: true, normalize: false },
   };
@@ -128,7 +129,7 @@ function setVal(ctx, p, v) {
   if (ctx === CREATE) updateSummary();
 }
 const FMT = {
-  pct: v => `${Math.round(v * 100)}%`, size: v => (v * 100).toFixed(1), x2: v => Number(v).toFixed(2),
+  pct: v => `${Math.round(v * 100)}%`, percent: v => `${Math.round(Number(v))}%`, size: v => (v * 100).toFixed(1), x2: v => Number(v).toFixed(2),
   int: v => String(Math.round(Number(v))), sec: v => `${Number(v)} s`, plain: v => String(v),
 };
 
@@ -253,7 +254,11 @@ const PANES = {
       const list = c.sources.filter(s => s.kind === kind);
       return `<div class="src-group"><div class="src-head">${ic(icon)}<h4>${title}</h4></div><div class="src-grid">${list.map(s => {
         const on = cfg.sources.includes(s.id);
-        const pill = !s.needs_key ? '<span class="pill free">sem chave</span>' : s.ready ? '<span class="pill ok">● chave ativa</span>' : `<span class="pill key">falta ${esc(s.env)}</span>`;
+        const pill = s.id === 'youtube_frame'
+          ? '<span class="pill key">opcional · confirme direitos</span>'
+          : s.provider === 'Storyblocks' && !s.ready
+            ? '<span class="pill key">falta API Key + Secret Key</span>'
+            : !s.needs_key ? '<span class="pill free">sem chave</span>' : s.ready ? '<span class="pill ok">● chave ativa</span>' : `<span class="pill key">falta ${esc(s.env)}</span>`;
         return `<label class="src ${on ? 'on' : ''} ${s.ready ? '' : 'dis'}" data-src="${s.id}"><input type="checkbox" data-source="${s.id}" ${on ? 'checked' : ''}><span class="tick">${ic('check')}</span><b>${esc(s.provider)}</b><small>${esc(s.blurb)}</small>${pill}</label>`;
       }).join('')}</div></div>`;
     };
@@ -263,16 +268,24 @@ const PANES = {
       <div class="card-title"><div><h3>De onde vêm as imagens e vídeos?</h3><p>Marque os bancos que o robô deve pesquisar. As fontes sem chave funcionam de imediato.</p></div>
         <div class="quick"><button type="button" class="btn ghost small" data-quick="video">Só vídeos</button><button type="button" class="btn ghost small" data-quick="image">Só fotos</button><button type="button" class="btn ghost small" data-quick="ready">Todas disponíveis</button><button type="button" class="btn ghost small" data-quick="none">Limpar</button></div></div>
       ${group('video', 'Vídeos', 'film')}${group('image', 'Fotos e imagens', 'image')}
-      <p class="hint" style="margin-top:14px">Cada resultado mostra autor, origem e licença. Confira a licença antes de publicar ou monetizar. Pixabay, Unsplash e Coverr têm limites próprios na API.</p>
+      <p class="hint" style="margin-top:14px">Cada resultado mostra autor, origem e licença. Confira a licença antes de publicar ou monetizar. A opção YouTube · miniatura fica desmarcada por padrão e só deve ser usada quando você tiver autorização.</p>
       <p class="hint" style="margin-top:8px"><b>Busca inteligente:</b> o robô traduz o conceito da cena, gera variações de termos e ordena os resultados por relevância, qualidade e popularidade. As consultas ficam em cache por 24 h para economizar chamadas.</p>
     </div>
     <div class="card">
       <div class="card-title"><div><h3>Como o robô escolhe</h3></div></div>
       <div class="grid2">
-        <div class="field"><span>Preferência de tipo</span>${seg(ctx, 'media_pref', [['mixed', 'Misturar'], ['video', 'Preferir vídeo'], ['image', 'Preferir foto']])}<small>A escolha automática dá prioridade ao tipo marcado e evita repetir a mesma mídia.</small></div>
+        <div class="field"><span>Preferência de tipo</span>${seg(ctx, 'media_pref', [['mixed', 'Misturar'], ['video', 'Preferir vídeo'], ['image', 'Preferir foto']])}<small>A preferência atua como desempate; a porcentagem abaixo define a distribuição automática.</small></div>
+        ${slider(ctx, 'video_percent', 'Percentual de cenas em vídeo', 0, 100, 5, 'percent', 'O robô prioriza vídeos nas cenas com maior nota de movimento. O restante recebe imagens.')}
+        ${slider(ctx, 'max_video_seconds', 'Duração máxima de cada clipe', 1, 10, 1, 'sec', 'O limite nunca ultrapassa 10 segundos. Clipes maiores são cortados pelo FFmpeg.')}
         ${slider(ctx, 'per_source', 'Opções por fonte e por cena', 1, 8, 1, 'int', 'Mais opções = mais escolha na revisão, mas mais chamadas às APIs.')}
         <label class="field"><span>Idioma da busca</span><select data-bind="search_lang"><option value="auto" ${cfg.search_lang === 'auto' ? 'selected' : ''}>Automático (detecta pelo texto)</option><option value="pt" ${cfg.search_lang === 'pt' ? 'selected' : ''}>Português</option><option value="en" ${cfg.search_lang === 'en' ? 'selected' : ''}>Inglês</option></select><small>Os bancos retornam mais resultados em inglês.</small></label>
         <label class="field"><span>Palavras extras em toda busca</span><input type="text" data-bind="query_extra" maxlength="60" placeholder="ex.: cinematic, vintage, 4k" value="${esc(cfg.query_extra)}"><small>Entram no final de cada pesquisa para dar um tom ao vídeo.</small></label>
+      </div>
+      <div class="field" style="margin-top:16px">
+        <span>Modelo OpenRouter para interpretar o roteiro</span>
+        <div class="row"><input id="openrouterModelInput" list="openrouterModelList" type="text" data-bind="openrouter_model" maxlength="120" value="${esc(cfg.openrouter_model || 'google/gemini-2.5-flash')}" placeholder="Ex.: google/gemini-2.5-flash" style="flex:1"><button type="button" class="btn ghost small" id="loadOpenRouterModelsBtn">Carregar modelos</button></div>
+        <datalist id="openrouterModelList"></datalist>
+        <small>A chave OPENROUTER_API_KEY é cadastrada em Chaves de API. O OpenRouter é prioritário; se falhar, o estúdio tenta Gemini e depois a busca tradicional.</small>
       </div>
       ${editing ? '<div class="note info" style="margin-top:14px">As fontes valem para <b>Buscar tudo de novo</b>. O ritmo das cenas só pode ser escolhido ao criar o projeto.</div>' : `
       <div class="field" style="margin-top:18px"><span>Ritmo das cenas</span><div class="choices">${Object.entries(c.pacing).map(([k, l]) => `<button type="button" class="choice ${cfg.pacing === k ? 'on' : ''}" data-set="pacing" data-val="${k}"><b>${l}</b><small>${pacingDesc[k] || ''}</small></button>`).join('')}</div></div>`}
@@ -1085,7 +1098,7 @@ $('#projectList').addEventListener('click', async e => {
   const open = e.target.closest('[data-open]'); if (open) openProject(open.dataset.open);
 });
 
-const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo' };
+const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo', 'media-library': 'viewMediaLibrary' };
 function showView(name) {
   Object.keys(VIEW_ID).forEach(v => {
     const el = $('#' + VIEW_ID[v]);
@@ -1100,9 +1113,98 @@ function showView(name) {
   if (name === 'groq') loadGroqView();
   if (name === 'skills') loadSkillsView();
   if (name === 'skills-video') loadSkillsVideoView();
+  if (name === 'media-library') checkStoryblocksConnection();
 }
 
+/* ---------- Biblioteca de Mídia Storyblocks */
+async function checkStoryblocksConnection() {
+  const status = $('#storyblocksConnectionStatus');
+  if (!status) return;
+  status.textContent = 'Verificando...';
+  status.className = 'chip';
+  try {
+    const res = await jpost('/api/keys/test', { key_id: 'storyblocks' });
+    status.textContent = res.message || (res.ok ? 'Storyblocks conectado' : 'Falha na conexão');
+    status.className = res.ok ? 'chip ok' : 'chip warn';
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = 'chip warn';
+  }
+}
+function renderStoryblocksResults(items) {
+  const host = $('#storyblocksResults');
+  if (!host) return;
+  if (!items.length) {
+    host.innerHTML = '<div class="empty" style="grid-column:1/-1">Nenhum resultado encontrado. Tente outras palavras-chave.</div>';
+    return;
+  }
+  host.innerHTML = items.map(item => {
+    const isVideo = item.media_type === 'video';
+    const preview = item.thumbnail || item.download_url || '';
+    const media = isVideo
+      ? (preview ? `<video src="${esc(item.download_url || preview)}" poster="${esc(preview)}" controls muted preload="none" playsinline></video>` : '<div class="empty">Prévia indisponível</div>')
+      : `<img src="${esc(preview)}" alt="${esc(item.title || 'Imagem Storyblocks')}" loading="lazy">`;
+    return `
+      <article class="media-result-card">
+        <div class="media-result-preview">${media}<span class="media-type-tag">${isVideo ? 'VÍDEO' : 'IMAGEM'}</span></div>
+        <div class="media-result-body">
+          <strong title="${esc(item.title || '')}">${esc(item.title || 'Mídia Storyblocks')}</strong>
+          <div class="media-result-meta">${item.duration ? fmtTime(item.duration) + ' · ' : ''}${item.width && item.height ? esc(item.width + ' × ' + item.height) : 'Prévia disponível'}</div>
+          <div class="media-result-actions"><a class="btn small primary" href="${esc(item.source_url || 'https://www.storyblocks.com')}" target="_blank" rel="noopener noreferrer">Ver licença e download</a></div>
+        </div>
+      </article>`;
+  }).join('');
+}
+async function searchStoryblocks(event) {
+  event?.preventDefault();
+  const query = ($('#storyblocksQuery')?.value || '').trim();
+  if (query.length < 2) return toast('Digite pelo menos dois caracteres.');
+  const host = $('#storyblocksResults'), btn = $('#storyblocksSearchBtn'), meta = $('#storyblocksResultMeta');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Pesquisando...'; }
+  if (host) host.innerHTML = '<div class="empty" style="grid-column:1/-1"><span class="spin"></span><br>Buscando no Storyblocks...</div>';
+  if (meta) meta.textContent = 'Pesquisando: ' + query;
+  try {
+    const result = await jpost('/api/storyblocks/search', {
+      query,
+      media_type: $('#storyblocksType')?.value || 'video',
+      orientation: $('#storyblocksOrientation')?.value || 'landscape',
+      per: Number($('#storyblocksPer')?.value || 12),
+      project_id: S.projectId || 'faceless-media-library',
+    });
+    renderStoryblocksResults(result.results || []);
+    if (meta) meta.textContent = (result.total || 0) + ' resultado(s) para “' + result.query + '”.';
+  } catch (err) {
+    if (host) host.innerHTML = '<div class="form-error" style="grid-column:1/-1">' + esc(err.message) + '</div>';
+    if (meta) meta.textContent = 'A pesquisa não foi concluída.';
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = ic('search') + ' Pesquisar'; }
+  }
+}
+$('#storyblocksSearchForm')?.addEventListener('submit', searchStoryblocks);
+$('#storyblocksCheckBtn')?.addEventListener('click', checkStoryblocksConnection);
+
+/* ---------- Modelos OpenRouter */
+async function loadOpenRouterModels() {
+  const btn = $('#loadOpenRouterModelsBtn');
+  const list = $('#openrouterModelList');
+  if (btn) { btn.disabled = true; btn.textContent = 'Carregando…'; }
+  try {
+    const data = await api('/api/openrouter/models');
+    if (!list) return;
+    list.innerHTML = (data.models || []).map(model => `<option value="${esc(model.id)}">`).join('');
+    toast((data.models || []).length + ' modelos OpenRouter carregados.');
+  } catch (err) {
+    toast('Não foi possível carregar modelos: ' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Carregar modelos'; }
+  }
+}
+document.addEventListener('click', event => {
+  if (event.target.closest('#loadOpenRouterModelsBtn')) loadOpenRouterModels();
+});
+
 /* ---------- View Skills de Vídeo (Estilos de Edição) */
+
 async function loadSkillsVideoView() {
   const list = $('#skillsVideoList');
   const count = $('#skillsVideoCount');
