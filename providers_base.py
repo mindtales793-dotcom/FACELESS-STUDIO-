@@ -95,15 +95,6 @@ class AvatarProvider:
         """Gera vídeo do avatar. Devolve {url, path, status, ...}."""
         raise NotImplementedError
 
-    async def list_avatars(self) -> list[dict[str, Any]]:
-        raise NotImplementedError
-
-    async def generate(self, avatar_id: str, audio_path: str | None = None,
-                       text: str | None = None, background: str = "default",
-                       **kwargs: Any) -> dict[str, Any]:
-        """Gera vídeo do avatar. Devolve {url, path, status, ...}."""
-        raise NotImplementedError
-
 
 class MediaFetcher:
     """Aquisição de arquivo de mídia (ex.: download de clipe do YouTube).
