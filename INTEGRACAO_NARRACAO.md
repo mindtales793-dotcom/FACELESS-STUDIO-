@@ -8,7 +8,7 @@ ao seu app Faceless Cloud Studio (Python/FastAPI), rodando na porta 3114.
 | Arquivo | Função |
 |---------|--------|
 | `server-narration.js` | Servidor Node.js com o router de narração (porta 3115) |
-| `.env.narration` | Variáveis de ambiente do servidor Node.js |
+| `.env.narration.example` | Modelo das variáveis do servidor Node.js (copie para `.env.narration`) |
 | `narration_proxy.py` | Proxy Python que encaminha para o Node.js |
 | `main.py` (editado) | Rotas de proxy `/api/narrations-proxy/*` |
 | `INTEGRACAO_NARRACAO.md` | Este guia |
@@ -45,7 +45,7 @@ fcs/
 │       └── narration-router.js
 ├── server-narration.js        ← NOVO
 ├── narration_proxy.py         ← NOVO
-├── .env.narration             ← NOVO
+├── .env.narration.example     ← NOVO (copie para .env.narration; esse arquivo real não vai pro git)
 ├── main.py                    ← EDITADO (rotas de proxy)
 └── .env                       ← existente (APP_PASSWORD=12345678)
 ```
@@ -60,7 +60,7 @@ APP_PASSWORD=12345678
 ```
 
 ### .env.narration (Node.js — novo)
-Copie `.env.narration` para `.env` e configure:
+Copie `.env.narration.example` para `.env.narration` (o `server-narration.js` lê esse arquivo sozinho; não precisa mexer no `.env` do Python) e configure:
 
 ```env
 FISH_API_KEY=COLOQUE_SUA_CHAVE_AQUI
@@ -90,7 +90,7 @@ Remove-Item Env:APP_PASSWORD -ErrorAction SilentlyContinue
 
 ```powershell
 cd "C:\Users\Lucas\Downloads\faceless_cloud_studio_v4 (1)\fcs"
-copy .env.narration .env
+copy .env.narration.example .env.narration   # só na primeira vez; depois edite a chave
 node server-narration.js
 ```
 
