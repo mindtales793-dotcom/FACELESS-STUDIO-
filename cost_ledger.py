@@ -6,12 +6,10 @@ Usado na aba Gastos e para exportação CSV.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from store import DATA_DIR, now_iso
+from store import DATA_DIR
 
 COSTS_DIR = DATA_DIR / "costs"
 COSTS_DIR.mkdir(parents=True, exist_ok=True)
