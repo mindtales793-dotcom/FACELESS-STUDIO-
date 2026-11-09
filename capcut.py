@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 import time
 import uuid
@@ -22,7 +21,7 @@ from typing import Any
 
 import styles
 from scenes import parse_srt
-from store import Tracker, ffmpeg_path, media_duration, now_iso, patch_state, probe_media, project_dir, read_state
+from store import Tracker, ffmpeg_path, media_duration, now_iso, patch_state, project_dir, read_state
 
 TOKEN = "##_draftpath_placeholder_0E685133-18CE-45ED-8CB8-2904A212EC80_##"
 PHOTO_DURATION = 10_800_000_000  # 3 h, como o CapCut grava para fotos
