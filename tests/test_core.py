@@ -140,11 +140,30 @@ def test_merge_audio_insere_pausas(tmp_path):
                        capture_output=True, check=True)
         partes.append(p)
     saida = tmp_path / "out.mp3"
-    ne.NarrationEngine()._merge_audio(partes, [1.0, 1.0], saida, ff)
+    duracao_reportada = ne.NarrationEngine()._merge_audio(partes, [1.0, 1.0], saida, ff)
     dur = float(subprocess.run(
         [shutil.which("ffprobe") or "ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=nw=1:nk=1", str(saida)], capture_output=True, text=True).stdout.strip())
     assert dur > 2.2  # 2 s de áudio + 0,3 s de pausa (antes a pausa nunca era criada: ~2,0 s)
+    assert duracao_reportada == pytest.approx(dur, abs=0.15)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg/ffprobe não instalados")
+def test_status_recupera_duracao_quando_job_antigo_tem_zero():
+    job_id = "d" * 32
+    audio = _salvar_narracao_completa_teste(job_id)
+    subprocess.run(
+        [shutil.which("ffmpeg"), "-y", "-f", "lavfi", "-i", "sine=f=440:d=1",
+         "-ar", "44100", "-ac", "1", str(audio)],
+        capture_output=True, check=True,
+    )
+    state = main.nar._read_job(job_id)
+    state["duration"] = 0
+    main.nar._write_job(job_id, state)
+
+    status = main.nar.get_job(job_id)
+    assert 0.8 <= status["duration"] <= 1.3
+    assert main.nar._read_job(job_id)["duration"] == status["duration"]
 
 
 def _salvar_narracao_completa_teste(job_id: str) -> Path:
