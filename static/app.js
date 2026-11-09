@@ -115,7 +115,7 @@ function defaultCfg() {
   const t = S.catalog.templates[0];
   return {
     ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', video_percent: 50, max_video_seconds: 10,
-    openrouter_model: 'google/gemini-2.5-flash', per_source: 3, pacing: t.pacing, search_lang: 'auto', query_extra: '',
+    openrouter_model: 'google/gemini-2.5-flash', per_source: 3, max_search_requests: 12, pacing: t.pacing, search_lang: 'auto', query_extra: '',
     template: t.id, style: {}, autopilot: false, auto_capcut: false,
     audio: { music_id: null, music_volume: t.audio.music_volume, narration_volume: 1, ducking: true, duck_level: 'medium', fade_in: 2, fade_out: 3, loop: true, normalize: false },
   };
@@ -277,7 +277,8 @@ const PANES = {
         <div class="field"><span>Preferência de tipo</span>${seg(ctx, 'media_pref', [['mixed', 'Misturar'], ['video', 'Preferir vídeo'], ['image', 'Preferir foto']])}<small>A preferência atua como desempate; a porcentagem abaixo define a distribuição automática.</small></div>
         ${slider(ctx, 'video_percent', 'Percentual de cenas em vídeo', 0, 100, 5, 'percent', 'O robô prioriza vídeos nas cenas com maior nota de movimento. O restante recebe imagens.')}
         ${slider(ctx, 'max_video_seconds', 'Duração máxima de cada clipe', 1, 10, 1, 'sec', 'O limite nunca ultrapassa 10 segundos. Clipes maiores são cortados pelo FFmpeg.')}
-        ${slider(ctx, 'per_source', 'Opções por fonte e por cena', 1, 8, 1, 'int', 'Mais opções = mais escolha na revisão, mas mais chamadas às APIs.')}
+        ${slider(ctx, 'per_source', 'Opções por fonte e por cena', 1, 8, 1, 'int', 'Quantidade máxima de resultados que cada fonte pode retornar para uma cena.')}
+        ${slider(ctx, 'max_search_requests', 'Máximo de consultas aos bancos por cena', 1, 24, 1, 'int', 'Limite total de chamadas fonte + consulta. Ex.: 12 permite até 12 pesquisas somando YouTube e bancos selecionados.')}
         <label class="field"><span>Idioma da busca</span><select data-bind="search_lang"><option value="auto" ${cfg.search_lang === 'auto' ? 'selected' : ''}>Automático (detecta pelo texto)</option><option value="pt" ${cfg.search_lang === 'pt' ? 'selected' : ''}>Português</option><option value="en" ${cfg.search_lang === 'en' ? 'selected' : ''}>Inglês</option></select><small>Os bancos retornam mais resultados em inglês.</small></label>
         <label class="field"><span>Palavras extras em toda busca</span><input type="text" data-bind="query_extra" maxlength="60" placeholder="ex.: cinematic, vintage, 4k" value="${esc(cfg.query_extra)}"><small>Entram no final de cada pesquisa para dar um tom ao vídeo.</small></label>
       </div>
@@ -1946,6 +1947,7 @@ function sceneHtml(s, i, p) {
   const line = o ? `<div class="src-line"><span>${esc(o.provider)}</span>${o.photographer ? `<span>· ${esc(o.photographer)}</span>` : ''}${o.license ? `<span>· ${esc(o.license)}</span>` : ''}${o.source_url ? `<a href="${esc(o.source_url)}" target="_blank" rel="noopener">origem ${ic('link')}</a>` : ''}</div>` : '';
   const matchInfo = o && o.media_match_score != null ? `<small class="hint"><b>Compatibilidade visual da IA: ${Math.round(Number(o.media_match_score))}%</b>${o.media_match_reason ? ` · ${esc(o.media_match_reason)}` : ''}</small>` : '';
   const rejectedInfo = !opts.length && Number(s.rejected_media_count || 0) > 0 ? ` A IA conferiu as prévias e descartou ${Number(s.rejected_media_count)} resultado(s) que não correspondiam à fala.` : '';
+  const searchUsageInfo = s.search_usage ? `<small class="hint">Consultas aos bancos: ${Number(s.search_usage.requests || 0)}/${Number(s.search_usage.limit || 0)}${s.search_usage.limit_reached ? ' · limite atingido' : ''}</small>` : '';
   const open = S.genOpen[s.id];
   const genBox = open ? `<div class="gen-box"><div class="seg"><button type="button" class="${open.kind === 'image' ? 'on' : ''}" data-genkind="image">Imagem · Nano Banana</button><button type="button" class="${open.kind === 'video' ? 'on' : ''}" data-genkind="video">Vídeo · Veo</button></div><textarea data-genprompt placeholder="Descreva a cena…">${esc(open.prompt)}</textarea><div class="row">${open.kind === 'video' ? `<select data-gensec style="width:auto">${[4, 6, 8].map(n => `<option value="${n}" ${open.seconds === n ? 'selected' : ''}>${n} s</option>`).join('')}</select>` : ''}<button type="button" class="btn primary small" data-gen="go">${ic('spark')} Gerar</button><button type="button" class="btn ghost small" data-gen="close">Fechar</button></div><small class="hint">${open.kind === 'video' ? 'O Veo cobra por segundo na sua chave Gemini e leva alguns minutos.' : 'A imagem sai em alguns segundos e entra nas opções da cena.'}</small></div>` : '';
   const genMsg = gen.status === 'running' ? `<div class="gen-msg"><span class="spin"></span>${esc(gen.message || 'Gerando…')}</div>` : gen.status === 'failed' ? `<div class="gen-msg fail">${ic('alert')} ${esc(gen.message || 'Falhou')}</div>` : '';
@@ -1977,7 +1979,8 @@ function sceneHtml(s, i, p) {
   <div class="scene-body"><div class="scene-text">${esc(s.text)}</div>
   <div class="q-row"><input type="text" data-q value="${esc(s.query || '')}" maxlength="160" title="Termos de busca"><button type="button" class="mini" data-act2="research" title="Buscar de novo">${ic('search')}</button></div>
   ${opts.length ? `<div class="opt-strip">${strip}</div>${line}${matchInfo}` : `<div class="scene-empty">Nenhuma mídia compatível foi encontrada. Mude a busca, escolha outras fontes ou envie um arquivo.${esc(rejectedInfo)}</div>`}
-  ${(s.search_notes || []).length ? `<small class="hint">${esc(s.search_notes.join(' · '))}</small>` : ''}
+  ${searchUsageInfo}
+  ${(s.search_notes || []).length ? `<small class="hint">${esc(s.search_notes.join(' · '))}</small>`
   <div class="scene-actions"><label class="btn ghost upl">${ic('upload')} Meu arquivo<input type="file" data-upload accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.m4v"></label>${flowOk ? `<button type="button" class="btn ghost" data-act2="gen">${ic('spark')} Gerar com IA</button>` : ''}<button type="button" class="btn ghost" data-act2="yt">${ic('film')} YouTube</button></div>
   ${ytBox}${genBox}${genMsg}</div></article>`;
 }
