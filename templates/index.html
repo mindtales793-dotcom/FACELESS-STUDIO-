@@ -22,6 +22,7 @@
         <button class="nav-item" data-view="groq"><i data-ic="mic"></i><span>Transcrição Groq</span></button>
         <button class="nav-item" data-view="skills"><i data-ic="sliders"></i><span>Roteiros (Skills)</span></button>
         <button class="nav-item" data-view="skills-video"><i data-ic="film"></i><span>Estilos de Vídeo (Skills)</span></button>
+        <button class="nav-item" data-view="media-library"><i data-ic="image"></i><span>Biblioteca de Mídia</span></button>
         <button class="nav-item" data-view="keys"><i data-ic="sliders"></i><span>Chaves de API</span></button>
       </nav>
       <div class="side-card">
@@ -731,6 +732,47 @@ Ancient biblical desert temple caravan under a star-filled night sky"></textarea
             • <b>Transição:</b> efeito entre cenas (fade, slide, wipe)<br>
             • <b>Efeitos:</b> chroma, glitch, scanlines, shake, flicker, sharpen, soft, pixel
           </div>
+        </div>
+      </section>
+
+      <!-- ============================================ BIBLIOTECA DE MÍDIA STORYBLOCKS -->
+      <section id="viewMediaLibrary" class="view" hidden>
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">BANCO DE MÍDIA PROFISSIONAL</div>
+            <h1>Biblioteca de Mídia</h1>
+            <p>Pesquise vídeos e imagens do Storyblocks sem sair do Faceless Studio. A busca usa suas credenciais no servidor.</p>
+          </div>
+          <button class="btn ghost" id="storyblocksCheckBtn"><i data-ic="refresh"></i> Verificar conexão</button>
+        </header>
+        <div class="card" style="padding:18px;margin-bottom:18px">
+          <form id="storyblocksSearchForm" class="storyblocks-search-form">
+            <label class="field" style="flex:1;min-width:220px">
+              <span>O que você procura?</span>
+              <input id="storyblocksQuery" type="text" placeholder="Ex.: luxury car driving at night, businessman in office..." minlength="2" maxlength="180" required>
+            </label>
+            <label class="field">
+              <span>Tipo de mídia</span>
+              <select id="storyblocksType"><option value="video">Vídeos</option><option value="image">Imagens</option></select>
+            </label>
+            <label class="field">
+              <span>Orientação</span>
+              <select id="storyblocksOrientation"><option value="landscape">Horizontal 16:9</option><option value="portrait">Vertical 9:16</option><option value="square">Quadrada 1:1</option></select>
+            </label>
+            <label class="field">
+              <span>Resultados</span>
+              <select id="storyblocksPer"><option value="8">8</option><option value="12" selected>12</option><option value="24">24</option></select>
+            </label>
+            <button class="btn primary" id="storyblocksSearchBtn" type="submit"><i data-ic="search"></i> Pesquisar</button>
+          </form>
+          <div class="hint" style="margin-top:10px">Dica: termos em inglês geralmente ajudam a encontrar cenas stock mais específicas. A prévia não substitui o download licenciado.</div>
+        </div>
+        <div class="spread" style="margin:18px 0 12px">
+          <div><h2 style="font-size:18px">Resultados</h2><p class="hint" id="storyblocksResultMeta">Faça uma pesquisa para carregar os resultados.</p></div>
+          <span class="chip" id="storyblocksConnectionStatus">Conexão não verificada</span>
+        </div>
+        <div class="media-grid" id="storyblocksResults">
+          <div class="empty" style="grid-column:1/-1">Digite uma palavra-chave para pesquisar no Storyblocks.</div>
         </div>
       </section>
 
