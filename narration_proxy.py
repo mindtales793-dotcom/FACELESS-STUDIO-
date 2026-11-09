@@ -11,10 +11,9 @@ Uso:
 from __future__ import annotations
 
 import httpx
-import uuid
 from typing import Any, Dict, Optional
-from fastapi import HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 
 NARRATION_BASE_URL = "http://127.0.0.1:3115"
 
