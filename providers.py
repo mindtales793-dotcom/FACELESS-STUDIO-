@@ -19,7 +19,7 @@ import youtube_mgr
 # Catálogo mostrado na interface. A chave "env" indica qual Secret ativa a fonte.
 SOURCES: list[dict[str, Any]] = [
     {"id": "youtube_video", "provider": "YouTube", "kind": "video", "env": None, "blurb": "Vídeos do YouTube (confira os direitos de uso antes de publicar)", "link": "https://www.youtube.com"},
-    {"id": "youtube_frame", "provider": "YouTube · miniatura", "kind": "image", "env": None, "blurb": "Usa apenas a miniatura pública como imagem. Desmarcado por padrão; confirme os direitos antes de reutilizar.", "link": "https://www.youtube.com"},
+    {"id": "youtube_frame", "provider": "YouTube · quadro", "kind": "image", "env": None, "blurb": "Extrai um quadro de até dez segundos de vídeo. Desmarcado por padrão; use somente com autorização.", "link": "https://www.youtube.com"},
     {"id": "storyblocks_video", "provider": "Storyblocks", "kind": "video", "env": "STORYBLOCKS_API_KEY", "blurb": "Vídeos cinematográficos do Storyblocks", "link": "https://www.storyblocks.com"},
     {"id": "storyblocks_image", "provider": "Storyblocks", "kind": "image", "env": "STORYBLOCKS_API_KEY", "blurb": "Imagens e ilustrações do Storyblocks", "link": "https://www.storyblocks.com"},
     {"id": "pexels_video", "provider": "Pexels", "kind": "video", "env": "PEXELS_API_KEY", "blurb": "Vídeos stock em boa qualidade", "link": "https://www.pexels.com/api/"},
@@ -67,7 +67,7 @@ def _asset_option(*, provider: str, media_type: str, asset_id: Any, download_url
         "license": license_name, "width": width, "height": height,
         "duration": duration, "download_location": download_location,
     }
-    for key in ("title", "tags", "description", "downloads", "likes", "views", "relevance", "preview_only", "requires_permission"):
+    for key in ("title", "tags", "description", "downloads", "likes", "views", "relevance", "preview_only", "requires_permission", "frame_from_video"):
         if extra.get(key) not in (None, "", []):
             option[key] = extra[key]
     return option
@@ -450,11 +450,12 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
                             "id": f"{item.get('id', 'yt')}_thumbnail",
                             "provider": "YouTube · miniatura",
                             "media_type": "image",
-                            "download_url": thumb,
+                            "download_url": item.get("download_url") or item.get("source_url") or "",
                             "thumbnail": thumb,
                             "duration": None,
-                            "license": "Miniatura do YouTube · confirme a autorização antes de reutilizar",
+                            "license": "Quadro extraído do YouTube · reutilize somente com autorização",
                             "requires_permission": True,
+                            "frame_from_video": True,
                         })
             elif source == "storyblocks_video":
                 options.extend(storyblocks_mgr.storyblocks_search(
