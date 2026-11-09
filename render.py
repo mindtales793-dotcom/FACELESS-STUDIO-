@@ -104,6 +104,8 @@ def _limit_video_duration(path: Path, folder: Path, max_seconds: int = 10) -> Pa
         duration = float(media_duration(path) or 0)
     except Exception:
         duration = 0.0
+    if duration <= 0:
+        raise RuntimeError("Não foi possível detectar a duração do vídeo; o limite de dez segundos não pode ser verificado.")
     if duration <= limit + 0.08:
         return path
 
