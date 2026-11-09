@@ -33,6 +33,7 @@ import media_fetcher
 import media_providers
 import skills
 import skills_video
+import storyblocks_mgr
 import narration_engine as nar
 import narration_proxy as nar_proxy
 import providers
