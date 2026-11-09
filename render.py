@@ -212,7 +212,6 @@ def cortar_silencios(audio_path: Path, limiar: str = "-50dB", pausa_maxima: floa
     Devolve (caminho_do_audio_cortado, nova_duracao_em_segundos).
     Se não houver silêncios para cortar ou houver erro, devolve o original.
     """
-    import tempfile
     dest_dir = work_dir or audio_path.parent
     dest_dir.mkdir(parents=True, exist_ok=True)
     out = dest_dir / f"narracao_cortada_{audio_path.stem}.m4a"
