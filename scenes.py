@@ -315,8 +315,31 @@ def _quality_score(option: dict[str, Any]) -> float:
     return score
 
 
-def auto_pick(scenes: list[dict[str, Any]], pref: str, ratio: str) -> None:
-    """Escolhe a melhor opção de cada cena, evitando repetir a mesma mídia no vídeo."""
+def assign_media_targets(scenes: list[dict[str, Any]], video_percent: int = 50) -> None:
+    """Distribui a cota de vídeos entre as cenas, priorizando as que precisam de movimento."""
+    try:
+        percent = max(0, min(100, int(video_percent)))
+    except (TypeError, ValueError):
+        percent = 50
+    total = len(scenes)
+    video_count = int(total * percent / 100 + 0.5)
+    ranked = sorted(
+        range(total),
+        key=lambda idx: (
+            float(scenes[idx].get("motion_score", 50) or 50),
+            1 if scenes[idx].get("recommended_media") == "video" else 0,
+            -idx,
+        ),
+        reverse=True,
+    )
+    video_ids = set(ranked[:video_count])
+    for idx, scene in enumerate(scenes):
+        scene["target_media_type"] = "video" if idx in video_ids else "image"
+
+
+def auto_pick(scenes: list[dict[str, Any]], pref: str, ratio: str, video_percent: int = 50) -> None:
+    """Escolhe mídia sem repetição, respeitando a cota imagem/vídeo quando há opções disponíveis."""
+    assign_media_targets(scenes, video_percent)
     used: set[tuple[Any, Any]] = set()
     provider_use: dict[str, int] = {}
     want_landscape = ratio != "9:16"
@@ -325,8 +348,13 @@ def auto_pick(scenes: list[dict[str, Any]], pref: str, ratio: str) -> None:
         if not options:
             continue
         dur = max(0.5, float(scene["end"]) - float(scene["start"]))
-        best_i, best_score = 0, -1e9
-        for i, option in enumerate(options):
+        target = scene.get("target_media_type")
+        preferred = [(i, option) for i, option in enumerate(options) if option.get("media_type") == target]
+        # Não deixa uma cena sem mídia se a cota escolhida não existe nos bancos marcados.
+        candidates = preferred or list(enumerate(options))
+        scene["media_target_fallback"] = not bool(preferred)
+        best_i, best_score = candidates[0][0], -1e9
+        for i, option in candidates:
             score = -i * 0.02
             key = (option.get("provider"), option.get("id"))
             if key in used:
@@ -334,7 +362,7 @@ def auto_pick(scenes: list[dict[str, Any]], pref: str, ratio: str) -> None:
             if option.get("local_file"):
                 score += 60
             if pref in ("video", "image"):
-                score += 6 if option.get("media_type") == pref else -1
+                score += 2 if option.get("media_type") == pref else -0.5
             if option.get("media_type") == "video":
                 d = float(option.get("duration") or 0)
                 if d >= dur:
@@ -352,7 +380,6 @@ def auto_pick(scenes: list[dict[str, Any]], pref: str, ratio: str) -> None:
                 else:
                     score -= 2.5
             score += _quality_score(option)
-            # Diversifica: a mesma fonte repetida muitas vezes perde um pouco de força.
             score -= min(3.0, provider_use.get(str(option.get("provider")), 0) * 0.35)
             if score > best_score:
                 best_i, best_score = i, score
