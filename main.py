@@ -35,6 +35,7 @@ import media_providers
 import motion_render
 import skills
 import skills_video
+import storyblocks_mgr
 import narration_engine as nar
 import narration_proxy as nar_proxy
 import providers
@@ -94,6 +95,10 @@ def normalize_settings(raw: dict[str, Any] | None, base: dict[str, Any] | None =
     out["media_pref"] = raw.get("media_pref", cur.get("media_pref", "mixed"))
     if out["media_pref"] not in ("mixed", "video", "image"):
         out["media_pref"] = "mixed"
+    out["video_percent"] = int(_num(raw.get("video_percent", cur.get("video_percent", 50)), 0, 100, 50))
+    # O limite superior é fixo em 10 s; pode ser reduzido por projeto.
+    out["max_video_seconds"] = int(_num(raw.get("max_video_seconds", cur.get("max_video_seconds", 10)), 1, 10, 10))
+    out["openrouter_model"] = " ".join(str(raw.get("openrouter_model", cur.get("openrouter_model", os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")))).split())[:120]
     out["per_source"] = int(_num(raw.get("per_source", cur.get("per_source", 3)), 1, 8, 3))
     out["pacing"] = raw.get("pacing", cur.get("pacing", "balanced"))
     if out["pacing"] not in styles.PACING:
@@ -147,6 +152,41 @@ def analyze_project(pid: str) -> None:
         counts: dict[str, int] = {}
         warnings: list[str] = []
         total_found = 0
+
+        # A IA recebe cada trecho junto de uma amostra do contexto geral do roteiro.
+        # OpenRouter é prioritário; scene_planner usa Gemini e busca tradicional como fallback.
+        script_context = ""
+        if state.get("script_file"):
+            try:
+                script_path = project_dir(pid) / state["script_file"]
+                if script_path.exists():
+                    script_context = script_path.read_text(encoding="utf-8-sig", errors="replace")[:2600]
+            except OSError:
+                script_context = ""
+        if not script_context:
+            script_context = " ".join(str(sc.get("text") or "") for sc in scenes)[:2600]
+        if os.getenv("OPENROUTER_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip():
+            for scene in scenes:
+                T.check()
+                try:
+                    plan = scene_planner.gerar_consultas_para_cena(
+                        str(scene.get("text") or scene.get("query") or ""),
+                        idioma=settings.get("search_lang", "auto"),
+                        max_consultas=3,
+                        contexto=script_context,
+                        model=settings.get("openrouter_model"),
+                    )
+                    queries = [str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()]
+                    if queries:
+                        scene["search_queries"] = queries[:3]
+                        scene["query"] = queries[0]
+                    scene["motion_score"] = int(plan.get("motion_score", 50))
+                    scene["recommended_media"] = plan.get("recommended_media", "video")
+                    scene["visual_description"] = plan.get("descricao_visual", "")
+                    scene["query_ai_provider"] = plan.get("provider", "fallback")
+                except Exception as exc:
+                    T.log(f"IA visual: fallback para busca tradicional nesta cena ({str(exc)[:100]}).", "warn", stage="search")
+
         for idx, scene in enumerate(scenes):
             T.check()
             keep = [o for o in scene.get("options", []) if o.get("local_file")]
@@ -178,7 +218,7 @@ def analyze_project(pid: str) -> None:
                  log=f"Busca concluída: {total_found} opções" + (f"; {empty} cenas ficaram sem resultado" if empty else "") + ".", level="warn" if empty else "info")
 
         def pick(s: dict[str, Any]) -> None:
-            auto_pick(s["scenes"], settings["media_pref"], settings["ratio"])
+            auto_pick(s["scenes"], settings["media_pref"], settings["ratio"], settings.get("video_percent", 50))
             s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
         patch_state(pid, pick)
         if settings["autopilot"]:
@@ -476,6 +516,14 @@ class YouTubeDownloadBody(BaseModel):
     url: str
     project_id: str | None = None
     scene_id: str | None = None
+
+
+class StoryblocksSearchBody(BaseModel):
+    query: str
+    media_type: str = "video"
+    orientation: str = "landscape"
+    per: int = 12
+    project_id: str | None = None
 
 
 class FlowGenerateBody(BaseModel):
@@ -783,6 +831,58 @@ def save_keys(body: KeysUpdateBody):
 @app.post("/api/keys/test")
 def test_key(body: KeyTestBody):
     return keys_mgr.test_provider_key(body.key_id, body.key_value)
+
+
+@app.post("/api/storyblocks/search")
+def storyblocks_search_route(body: StoryblocksSearchBody):
+    """Busca prévias Storyblocks sem enviar a chave secreta ao navegador."""
+    query = " ".join((body.query or "").split())[:180]
+    if len(query) < 2:
+        raise HTTPException(status_code=400, detail="Digite pelo menos dois caracteres.")
+    api_key = os.getenv("STORYBLOCKS_API_KEY", "").strip()
+    api_secret = os.getenv("STORYBLOCKS_API_SECRET", "").strip()
+    if not keys_mgr.is_active_key(api_key) or not keys_mgr.is_active_key(api_secret):
+        raise HTTPException(status_code=400, detail="Configure API Key e Secret Key do Storyblocks em Chaves de API.")
+    media_type = "image" if body.media_type == "image" else "video"
+    orientation = body.orientation if body.orientation in ("landscape", "portrait", "square") else "landscape"
+    per = max(1, min(24, int(body.per or 12)))
+    try:
+        results = storyblocks_mgr.storyblocks_search(
+            query, api_key, media_type, per, orientation,
+            api_secret=api_secret,
+            project_id=body.project_id or "faceless-media-library",
+            user_id="faceless-local-user",
+        )
+        return {"results": results, "total": len(results), "query": query, "media_type": media_type}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Falha na busca Storyblocks: {str(exc)[:220]}")
+
+
+@app.get("/api/openrouter/models")
+def openrouter_models_route():
+    """Lista modelos de texto disponíveis para a chave OpenRouter configurada."""
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not keys_mgr.is_active_key(key):
+        raise HTTPException(status_code=400, detail="Configure OPENROUTER_API_KEY em Chaves de API.")
+    try:
+        response = requests.get(
+            "https://openrouter.ai/api/v1/models",
+            params={"output_modalities": "text", "sort": "pricing-low-to-high", "limit": 100},
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        entries = response.json().get("data") or []
+        models = []
+        for item in entries:
+            model_id = str(item.get("id") or "")
+            name = str(item.get("name") or model_id)
+            if not model_id or not item.get("architecture", {}).get("output_modalities", ["text"]):
+                continue
+            models.append({"id": model_id, "name": name, "context_length": item.get("context_length")})
+        return {"models": models[:100]}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Não foi possível carregar os modelos OpenRouter: {str(exc)[:180]}")
 
 
 # ------------------------------------------------------------------ YouTube
