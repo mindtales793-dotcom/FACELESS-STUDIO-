@@ -205,7 +205,7 @@ def storyblocks_search(
             tags = [t.strip() for t in re.split(r"[,;]", tags) if t.strip()]
         blob = f"{title} {description} {' '.join(str(t) for t in tags)}".lower()
         overlap = sum(1 for word in query_words if word in blob)
-        item_url = item.get("url") or f"https://www.storyblocks.com/{'video' if media_type == 'video' else 'image'}/{asset_id}"
+        item_url = item.get("url") or "https://www.storyblocks.com/"
 
         options.append(_asset_option(
             provider="Storyblocks",
