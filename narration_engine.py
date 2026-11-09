@@ -450,7 +450,20 @@ class NarrationEngine:
         public = {k: v for k, v in state.items()
                   if k not in ("chunks", "reference_id")}
         if state.get("status") == "complete":
-            public["audio_url"] = f"/api/narrations/{job_id}/download"
+            audio_path = self._job_dir(job_id) / state.get("audio_file", "narration.mp3")
+            srt_path = self._job_dir(job_id) / state.get("srt_file", "narration.srt")
+            if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail="A geração terminou, mas o MP3 final não foi encontrado ou está vazio.",
+                )
+            if not srt_path.is_file() or srt_path.stat().st_size <= 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail="A geração terminou, mas o arquivo de legendas não foi encontrado ou está vazio.",
+                )
+            public["audio_url"] = f"/api/narrations/{job_id}/audio"
+            public["audio_download_url"] = f"/api/narrations/{job_id}/download"
             public["srt_url"] = f"/api/narrations/{job_id}/subtitles"
         public["paused"] = bool(state.get("paused"))
         public["cancelled"] = bool(state.get("cancelled"))
@@ -809,6 +822,22 @@ class NarrationEngine:
         )
         if merge.returncode != 0:
             raise RuntimeError(f"Falha ao juntar os trechos de áudio: {(merge.stderr or merge.stdout)[-1600:]}")
+        if not output.is_file() or output.stat().st_size < 128:
+            raise RuntimeError("O FFmpeg terminou, mas não criou um MP3 final válido.")
+        validation = subprocess.run(
+            [ffprobe_path(), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(output)],
+            capture_output=True, text=True, timeout=60,
+        )
+        try:
+            final_duration = float(validation.stdout.strip())
+        except (TypeError, ValueError):
+            final_duration = 0.0
+        if validation.returncode != 0 or final_duration <= 0:
+            raise RuntimeError(
+                "O MP3 final foi criado, mas não passou na validação de reprodução: "
+                f"{(validation.stderr or validation.stdout)[-800:]}"
+            )
 
         # Limpeza
         concat_file.unlink(missing_ok=True)
@@ -822,7 +851,10 @@ class NarrationEngine:
         state = self._read_job(job_id)
         if state.get("status") != "complete":
             raise HTTPException(status_code=409, detail="A narração ainda não está pronta.")
-        return self._job_dir(job_id) / state.get("audio_file", "narration.mp3")
+        audio_path = self._job_dir(job_id) / state.get("audio_file", "narration.mp3")
+        if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+            raise HTTPException(status_code=404, detail="O MP3 final não existe ou está vazio.")
+        return audio_path
 
     def get_srt_file(self, job_id: str) -> Path:
         state = self._read_job(job_id)
