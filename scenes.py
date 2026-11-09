@@ -266,6 +266,39 @@ def _scene(cues: list[dict[str, Any]], number: int, lang: str, extra: str) -> di
     }
 
 
+def _fit_groups_to_limit(groups: list[list[dict[str, Any]]], max_scenes: int) -> list[list[dict[str, Any]]]:
+    """Reduz a quantidade de grupos com o mínimo de junções e sem perder a ordem.
+
+    Distribui os grupos originais em blocos contíguos e equilibrados. Ex.: 131
+    grupos com limite 120 viram 11 cenas com dois grupos e 109 com um grupo,
+    em vez de juntar tudo em pares e reduzir a quantidade praticamente pela metade.
+    """
+    total = len(groups)
+    try:
+        limit = max(1, int(max_scenes))
+    except (TypeError, ValueError):
+        limit = 120
+    if total <= limit:
+        return groups
+
+    fitted: list[list[dict[str, Any]]] = []
+    start = 0
+    for index in range(limit):
+        # Arredondamento inteiro distribui as junções pelo vídeo, evitando
+        # concentrar todas as cenas maiores no começo ou no final.
+        end = ((index + 1) * total + limit // 2) // limit
+        end = max(start + 1, end)
+        # Reserva ao menos um grupo para cada cena que ainda falta criar.
+        end = min(end, total - (limit - index - 1))
+        merged: list[dict[str, Any]] = []
+        for group in groups[start:end]:
+            merged.extend(group)
+        fitted.append(merged)
+        start = end
+
+    return fitted
+
+
 def group_cues(cues: list[dict[str, Any]], pacing: str, lang: str, extra: str, max_scenes: int) -> tuple[list[dict[str, Any]], bool]:
     """Agrupa legendas em cenas conforme o ritmo. Retorna (cenas, ritmo_foi_limitado)."""
     rule = PACING.get(pacing, PACING["balanced"])
@@ -285,11 +318,14 @@ def group_cues(cues: list[dict[str, Any]], pacing: str, lang: str, extra: str, m
             current.append(cue)
     if current:
         groups.append(current)
-    capped = False
-    if len(groups) > max_scenes:  # limita as chamadas às APIs juntando cenas vizinhas
-        capped = True
-        stride = (len(groups) + max_scenes - 1) // max_scenes
-        groups = [sum(groups[i:i + stride], []) for i in range(0, len(groups), stride)]
+
+    try:
+        scene_limit = max(1, int(max_scenes))
+    except (TypeError, ValueError):
+        scene_limit = 120
+    capped = len(groups) > scene_limit
+    if capped:
+        groups = _fit_groups_to_limit(groups, scene_limit)
     return [_scene(g, n + 1, lang, extra) for n, g in enumerate(groups)], capped
 
 
