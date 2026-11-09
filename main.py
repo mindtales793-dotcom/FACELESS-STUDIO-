@@ -57,7 +57,10 @@ from store import (
 )
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
-MAX_SCENES = int(os.getenv("MAX_SCENES", "120"))
+try:
+    MAX_SCENES = max(1, int(os.getenv("MAX_SCENES", "120")))
+except (TypeError, ValueError):
+    MAX_SCENES = 120
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "800"))
 AUDIO_EXT = (".mp3", ".wav", ".m4a", ".aac", ".ogg")
 MEDIA_IMG = (".jpg", ".jpeg", ".png", ".webp")
@@ -2475,7 +2478,7 @@ async def create_project(
             {"n": 2, "t": now_iso(), "stage": "parse", "level": "info", "msg": f"Dividi em {len(scenes)} cenas (ritmo {styles.PACING[cfg['pacing']]['label'].lower()}, busca em {'inglês' if lang == 'en' else 'português'})."},
         ]
         if capped:
-            log.append({"n": 3, "t": now_iso(), "stage": "parse", "level": "warn", "msg": f"O ritmo escolhido passava de {MAX_SCENES} cenas; juntei cenas vizinhas para respeitar o limite (MAX_SCENES)."})
+            log.append({"n": 3, "t": now_iso(), "stage": "parse", "level": "warn", "msg": f"A divisão ultrapassou o limite de {MAX_SCENES} cenas; combinei somente o necessário e distribuí as junções ao longo do vídeo."})
         state = {
             "id": pid, "title": title, "created_at": now_iso(), "updated_at": now_iso(), "status": "queued", "progress": 0,
             "message": "Projeto recebido. Preparando a busca de cenas...", "settings": cfg, "ratio": cfg["ratio"], "quality": cfg["quality"],
