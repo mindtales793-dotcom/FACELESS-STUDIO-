@@ -884,7 +884,9 @@ def openrouter_models_route():
         for item in entries:
             model_id = str(item.get("id") or "")
             name = str(item.get("name") or model_id)
-            if not model_id or not item.get("architecture", {}).get("output_modalities", ["text"]):
+            architecture = item.get("architecture") or {}
+            modalities = architecture.get("output_modalities") or ["text"]
+            if not model_id or "text" not in modalities:
                 continue
             models.append({"id": model_id, "name": name, "context_length": item.get("context_length")})
         return {"models": models[:100]}
