@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -8,9 +7,8 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
-import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -31,6 +29,7 @@ import job_queue
 import keys_mgr
 import media_fetcher
 import media_providers
+import motion_render
 import skills
 import skills_video
 import narration_engine as nar
@@ -44,12 +43,11 @@ from capcut import build_capcut_package
 import capcut_draft
 from capcut_draft import DRAFTS_DIR
 from cost_ledger import register_cost, list_costs, total_costs
-from providers_base import MediaProvider, ImageGenProvider, VideoGenProvider, AvatarProvider, MediaFetcher
 from render import build_mix_cmd, music_path, render_project
 from scenes import auto_pick, group_cues, make_query, make_youtube_query, parse_srt, query_variants
 from store import (
     ACTIVE_JOBS, BASE_DIR, DATA_DIR, MAX_MEDIA_MB, MUSIC_DIR, PREVIEW_DIR, Cancelled, Tracker, default_stages, ffmpeg_has_filter,
-    ffmpeg_path, lock, media_duration, now_iso, patch_state, probe_media, project_dir, read_state, run_ffmpeg, write_state,
+    ffmpeg_path, media_duration, now_iso, patch_state, probe_media, project_dir, read_state, run_ffmpeg, write_state,
 )
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
@@ -192,8 +190,9 @@ def analyze_project(pid: str) -> None:
         patch_state(pid, lambda s: s.update({"status": "ready", "message": "Busca cancelada.", "cancel_requested": False}))
         T.log("Busca cancelada por você.", "warn")
     except Exception as exc:
-        patch_state(pid, lambda s: s.update({"status": "failed", "error": str(exc), "message": str(exc)}))
-        T.update(stage="search", status="failed", detail=str(exc)[:200], log=str(exc)[:500], level="error")
+        err = str(exc)  # copia: a variável `exc` some ao sair do except e a lambda a captura por referência
+        patch_state(pid, lambda s: s.update({"status": "failed", "error": err, "message": err}))
+        T.update(stage="search", status="failed", detail=err[:200], log=err[:500], level="error")
     finally:
         ACTIVE_JOBS.discard(pid)
 
@@ -254,8 +253,9 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
         patch_state(pid, lambda s: s.update({"status": "ready", "message": "Busca cancelada.", "cancel_requested": False}))
         T.log("Busca cancelada por você.", "warn")
     except Exception as exc:
-        patch_state(pid, lambda s: s.update({"status": "failed", "error": str(exc), "message": str(exc)}))
-        T.update(stage="search", status="failed", detail=str(exc)[:200], log=str(exc)[:500], level="error")
+        err = str(exc)  # copia: a variável `exc` some ao sair do except e a lambda a captura por referência
+        patch_state(pid, lambda s: s.update({"status": "failed", "error": err, "message": err}))
+        T.update(stage="search", status="failed", detail=err[:200], log=err[:500], level="error")
     finally:
         ACTIVE_JOBS.discard(pid)
 
@@ -281,8 +281,9 @@ def run_capcut_job(pid: str) -> None:
         patch_state(pid, lambda s: s.update({"capcut": {"status": "none"}, "cancel_requested": False}))
         T.update(stage="capcut", status="pending", log="Exportação para o CapCut cancelada.", level="warn")
     except Exception as exc:
-        patch_state(pid, lambda s: s.update({"capcut": {"status": "failed", "error": str(exc)[:300]}}))
-        T.update(stage="capcut", status="failed", detail=str(exc)[:200], log=f"Falha ao montar o projeto do CapCut: {exc}", level="error")
+        err = str(exc)
+        patch_state(pid, lambda s: s.update({"capcut": {"status": "failed", "error": err[:300]}}))
+        T.update(stage="capcut", status="failed", detail=err[:200], log=f"Falha ao montar o projeto do CapCut: {err}", level="error")
     finally:
         ACTIVE_JOBS.discard(pid)
 
@@ -401,7 +402,7 @@ def flow_queue():
 
 
 @app.post("/api/flow/queue/retry")
-def flow_queue_retry(body: dict[str, Any]):
+def flow_queue_retry(body: dict[str, Any], background_tasks: BackgroundTasks):
     """Reprocessa um item da fila que deu erro."""
     item_id = body.get("id")
     if not item_id:
@@ -415,14 +416,14 @@ def flow_queue_retry(body: dict[str, Any]):
     item["status"] = "processando"
     item["erro"] = None
     _queue_save(item)
-    background_tasks = BackgroundTasks()
+    # BackgroundTasks tem de ser o parâmetro injetado pelo FastAPI: uma instância criada à mão
+    # nunca é executada, e o item ficava preso em "processando" para sempre.
     background_tasks.add_task(_run_queue_item, item)
     return {"ok": True, "id": item_id}
 
 
 def _run_queue_item(item: dict[str, Any]) -> None:
     """Executa um item da fila em background e atualiza o status."""
-    item_id = item["id"]
     try:
         prompt = item.get("prompt", "").strip()
         kind = item.get("kind", "image")
@@ -567,6 +568,35 @@ def active_app_password() -> str:
     return pwd if keys_mgr.is_active_key(pwd) else ""
 
 
+def _safe_equals(a: str, b: str) -> bool:
+    """Comparação em tempo constante. hmac.compare_digest com str só aceita ASCII e levanta TypeError
+    (erro 500) com senha acentuada ou cookie malformado; comparar em bytes evita isso."""
+    return hmac.compare_digest((a or "").encode("utf-8"), (b or "").encode("utf-8"))
+
+
+def _session_token(pwd: str) -> str:
+    """Valor do cookie de sessão: HMAC com segredo próprio (SESSION_SECRET, opcional) em vez do SHA-256
+    puro da senha, que era o mesmo valor em qualquer instalação e permitia testar senhas offline."""
+    secret = os.getenv("SESSION_SECRET", "").strip() or pwd
+    return hmac.new(secret.encode("utf-8"), b"faceless-session-v1:" + pwd.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+# Limite de tentativas de login por IP (em memória): MAX_LOGIN_FAILS erros em LOGIN_WINDOW_S segundos.
+MAX_LOGIN_FAILS = 8
+LOGIN_WINDOW_S = 300
+_LOGIN_FAILS: dict[str, list[float]] = {}
+
+
+def _login_blocked(ip: str) -> bool:
+    now = time.time()
+    recent = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < LOGIN_WINDOW_S]
+    if recent:
+        _LOGIN_FAILS[ip] = recent
+    else:
+        _LOGIN_FAILS.pop(ip, None)
+    return len(recent) >= MAX_LOGIN_FAILS
+
+
 class PasswordMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         pwd = active_app_password()
@@ -576,8 +606,8 @@ class PasswordMiddleware(BaseHTTPMiddleware):
         if path in ("/", "/api/login", "/api/health", "/favicon.ico") or path.startswith("/static/"):
             return await call_next(request)
         token = request.cookies.get("faceless_session", "")
-        expected = hashlib.sha256(pwd.encode()).hexdigest()
-        if not hmac.compare_digest(token, expected):
+        expected = _session_token(pwd)
+        if not _safe_equals(token, expected):
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "Acesso protegido. Faça login."}, status_code=401)
             return HTMLResponse("Acesso protegido. Abra o app e faça login.", status_code=401)
@@ -679,10 +709,26 @@ async def youtube_download_route(body: YouTubeDownloadBody):
             raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _safe_child(folder: Path, name: str) -> Path | None:
+    """Resolve `name` dentro de `folder` e devolve o arquivo, ou None se escapar da pasta (path traversal).
+
+    Em Windows (o app roda lá via INICIAR_WINDOWS.bat) um nome como "..\\..\\x" atravessa pastas,
+    então não basta confiar que o roteador não aceita "/" no parâmetro.
+    """
+    base = folder.resolve()
+    try:
+        p = (base / name).resolve()
+    except (OSError, ValueError):
+        return None
+    if base not in p.parents or not p.is_file():
+        return None
+    return p
+
+
 @app.get("/api/youtube/file/{name}")
 def get_youtube_downloaded_file(name: str):
-    p = (DATA_DIR / "youtube_downloads" / name).resolve()
-    if not p.is_file():
+    p = _safe_child(DATA_DIR / "youtube_downloads", name)
+    if p is None:
         raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
     return FileResponse(p, media_type="video/mp4")
 
@@ -696,8 +742,8 @@ def get_flow_gallery():
 @app.get("/api/flow/gallery/{name}")
 def get_flow_gallery_file(name: str):
     for folder in (flow.FLOW_GALLERY_DIR, flow.MCP_OUT_DIR):
-        p = (folder / name).resolve()
-        if p.is_file():
+        p = _safe_child(folder, name)
+        if p is not None:
             is_video = p.suffix.lower() in (".mp4", ".mov")
             return FileResponse(p, media_type="video/mp4" if is_video else "image/png")
     raise HTTPException(status_code=404, detail="Arquivo da galeria não encontrado.")
@@ -927,10 +973,9 @@ async def flow_upload_reference(reference: UploadFile = File(...)):
 
 @app.get("/api/flow/reference/{name}")
 def flow_get_reference(name: str):
-    for folder in (FLOW_REF_DIR,):
-        p = (folder / name).resolve()
-        if p.is_file():
-            return FileResponse(p)
+    p = _safe_child(FLOW_REF_DIR, name)
+    if p is not None:
+        return FileResponse(p)
     raise HTTPException(status_code=404, detail="Imagem de referência não encontrada.")
 
 
@@ -1255,11 +1300,18 @@ def login(body: LoginBody, request: Request):
     pwd = active_app_password()
     if not pwd:
         return {"ok": True, "message": "Proteção por senha não está ativada."}
-    if not hmac.compare_digest(body.password, pwd):
+    ip = request.client.host if request.client else "?"
+    if _login_blocked(ip):
+        raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente de novo.")
+    if not _safe_equals(body.password, pwd):
+        _LOGIN_FAILS.setdefault(ip, []).append(time.time())
         raise HTTPException(status_code=401, detail="Senha incorreta.")
-    token = hashlib.sha256(pwd.encode()).hexdigest()
+    _LOGIN_FAILS.pop(ip, None)
+    token = _session_token(pwd)
+    # Atrás de proxy (Replit, nginx) o esquema visto pelo app é http; o proxy informa o original.
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
     response = JSONResponse({"ok": True})
-    response.set_cookie("faceless_session", token, httponly=True, secure=(request.url.scheme == "https"), samesite="lax", max_age=60 * 60 * 24 * 14)
+    response.set_cookie("faceless_session", token, httponly=True, secure=https, samesite="lax", max_age=60 * 60 * 24 * 14)
     return response
 
 
@@ -1633,8 +1685,9 @@ async def shutdown_narration_proxy():
 
 
 # ------------------------------------------------------------------ motion graphics (Remotion)
-MOTION_DIR = Path(__file__).resolve().parent / "data" / "motion"
-MOTION_DIR.mkdir(parents=True, exist_ok=True)
+# Mesma pasta em que o motion_render grava (DATA_DIR/motion). Antes era fixa em <repo>/data/motion,
+# então com DATA_DIR definido (disco persistente) os vídeos renderizados davam 404 ao serem servidos.
+MOTION_DIR = motion_render.MOTION_DIR
 
 class MotionRenderBody(BaseModel):
     text: str
@@ -1665,8 +1718,8 @@ def render_motion_scene(body: MotionRenderBody):
 @app.get("/api/motion/{filename}")
 def get_motion_video(filename: str):
     """Serve um vídeo renderizado pelo Remotion."""
-    file_path = MOTION_DIR / filename
-    if not file_path.exists():
+    file_path = _safe_child(MOTION_DIR, filename)
+    if file_path is None:
         raise HTTPException(status_code=404, detail="Vídeo não encontrado.")
     return FileResponse(file_path, media_type="video/mp4", filename=filename)
 

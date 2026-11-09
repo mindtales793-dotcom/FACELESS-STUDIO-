@@ -14,7 +14,6 @@ from typing import Any
 import requests
 
 from scenes import parse_srt
-from store import now_iso
 
 API = "https://generativelanguage.googleapis.com/v1beta"
 IMAGE_MODEL = os.getenv("FLOW_IMAGE_MODEL", "gemini-2.5-flash-image")
@@ -162,13 +161,13 @@ def gerar_consultas_para_cena(texto: str, idioma: str = "auto", max_consultas: i
 
 
 def planejar_cenas(srt_text: str, idioma: str = "auto", max_cenas: int = 60,
-                   usar_llm: bool = True) -> list[dict[str, Any]]:
+                   usar_llm: bool = True, max_consultas: int = 4) -> list[dict[str, Any]]:
     """Divide um SRT em cenas e gera consultas de busca para cada uma."""
     cenas = parse_srt_to_cenas(srt_text)
     cenas = cenas[:max_cenas]
     for cena in cenas:
         if usar_llm:
-            plano = gerar_consultas_para_cena(cena["texto"], idioma=idioma)
+            plano = gerar_consultas_para_cena(cena["texto"], idioma=idioma, max_consultas=max_consultas)
             cena["palavras_chave"] = plano.get("palavras_chave", [])
             consulta_pt = plano.get("consultas", [])
             # Garante pelo menos uma consulta em inglês se o idioma for pt

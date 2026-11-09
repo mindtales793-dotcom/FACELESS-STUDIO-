@@ -9,13 +9,12 @@ Formato baseado na estrutura draft_content.json do CapCut, serializada como mód
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-from store import DATA_DIR, now_iso, project_dir, read_state
+from store import DATA_DIR, project_dir, read_state
 
 DRAFTS_DIR = DATA_DIR / "capcut_drafts"
 DRAFTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import subprocess
 import time
@@ -757,18 +756,17 @@ class NarrationEngine:
     def _merge_audio(self, files: list[Path], durations: list[float],
                      output: Path, ffmpeg: str) -> None:
         """Une todos os áudios com FFmpeg, adicionando pausas naturais."""
-        # Cria arquivo de concat com pausas
-        concat_lines: list[str] = []
-        pause_file = None
-
-        # Cria um arquivo de silêncio de 0.3s para pausas entre blocos
+        # Cria um arquivo de silêncio de 0.3s para pausas entre blocos.
+        # (antes usava anoisesrc com c=mono: opção inválida, o FFmpeg falhava em silêncio
+        # e nenhuma pausa era inserida; e anoisesrc geraria ruído, não silêncio.)
         pause_file = output.parent / "pause_03s.mp3"
-        subprocess.run(
-            [ffmpeg, "-y", "-f", "lavfi", "-i",
-             "anoisesrc=d=0.3:r=44100:c=mono", "-c:a", "libmp3lame",
-             "-b:a", "128k", str(pause_file)],
+        pause = subprocess.run(
+            [ffmpeg, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+             "-t", "0.3", "-c:a", "libmp3lame", "-b:a", "128k", str(pause_file)],
             capture_output=True, text=True, timeout=60,
         )
+        if pause.returncode != 0:
+            pause_file.unlink(missing_ok=True)  # segue sem pausas em vez de quebrar a narração
 
         all_files: list[Path] = []
         for i, f in enumerate(files):

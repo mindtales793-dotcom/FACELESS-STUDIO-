@@ -1,9 +1,13 @@
 "use strict";
 
+const path = require("node:path");
+
+// Lê .env.narration primeiro e depois .env (dotenv não sobrescreve o que já foi definido).
+// Assim não é preciso copiar .env.narration por cima do .env do Python.
+require("dotenv").config({ path: path.join(__dirname, ".env.narration") });
 require("dotenv").config();
 
 const express = require("express");
-const path = require("node:path");
 const { createNarrationRouter } = require("./src/narration/narration-router");
 
 const app = express();
