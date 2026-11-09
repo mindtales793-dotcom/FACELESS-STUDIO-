@@ -255,6 +255,9 @@ def download_youtube_video(url_or_id: str, dest: Path, max_duration: int = 10) -
         duration = duration_of(actual_file)
         if duration <= 0:
             duration = float(info.get("duration") or 0)
+        if duration <= 0:
+            actual_file.unlink(missing_ok=True)
+            raise RuntimeError("Não foi possível verificar a duração do vídeo; a regra de até dez segundos não pode ser garantida.")
         if duration > max_duration + 0.15:
             if not ffmpeg_bin or not Path(ffmpeg_bin).exists():
                 actual_file.unlink(missing_ok=True)
