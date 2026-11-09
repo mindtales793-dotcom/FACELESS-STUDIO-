@@ -2,12 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
-import os
 import re
 import time
-from pathlib import Path
 from typing import Any
 
 import requests
