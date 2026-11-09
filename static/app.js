@@ -1396,6 +1396,46 @@ $('#viewSkillsVideo')?.addEventListener('change', e => {
 });
 
 /* ---------- tela de chaves e testes ---------- */
+async function loadSystemDiagnostics() {
+  const btn = $('#runSystemDoctorBtn');
+  const status = $('#doctorStatus');
+  const summary = $('#doctorSummary');
+  const results = $('#doctorResults');
+  if (!results) return;
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Verificando…'; }
+  if (status) { status.className = 'chip'; status.textContent = 'Em execução'; }
+  if (summary) summary.textContent = 'Verificando dependências locais. Nenhuma chave será exibida ou enviada.';
+  results.innerHTML = '<div class="empty">Executando verificações…</div>';
+  try {
+    const res = await api('/api/doctor');
+    const labels = { ok: 'OK', warning: 'ATENÇÃO', error: 'ERRO' };
+    const icons = { ok: '✓', warning: '!', error: '×' };
+    if (status) {
+      status.className = res.ok ? 'chip ok' : 'chip warn';
+      status.textContent = res.ok ? 'Essencial pronto' : 'Precisa de atenção';
+    }
+    if (summary) {
+      const c = res.counts || {};
+      summary.textContent = `${res.summary || 'Diagnóstico concluído'} · ${c.ok || 0} OK · ${c.warning || 0} avisos · ${c.error || 0} erros`;
+    }
+    results.innerHTML = (res.checks || []).map(item => {
+      const state = ['ok', 'warning', 'error'].includes(item.status) ? item.status : 'warning';
+      const label = labels[state];
+      const icon = icons[state];
+      return `<article class="doctor-check status-${state}">
+        <div class="doctor-check-head"><b>${esc(item.label || item.id || 'Verificação')}</b><span class="doctor-state">${icon} ${label}</span></div>
+        <p>${esc(item.detail || '')}</p>
+      </article>`;
+    }).join('') || '<div class="empty">Nenhuma verificação foi retornada.</div>';
+  } catch (err) {
+    if (status) { status.className = 'chip warn'; status.textContent = 'Falha'; }
+    if (summary) summary.textContent = 'Não foi possível executar o diagnóstico.';
+    results.innerHTML = `<div class="form-error">${esc(err.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = `${ic('refresh')} Executar diagnóstico`; }
+  }
+}
+
 async function loadKeysView() {
   const grid = $('#keysCardsGrid');
   if (!grid) return;
@@ -2365,6 +2405,8 @@ $('#viewKeys')?.addEventListener('click', async e => {
     }
   }
 });
+
+$('#runSystemDoctorBtn')?.addEventListener('click', loadSystemDiagnostics);
 
 $('#saveAllKeysBtn')?.addEventListener('click', () => {
   const toSave = {};
