@@ -101,7 +101,7 @@ def _asset_option(
         "height": height,
         "duration": duration,
     }
-    for key in ("title", "tags", "description", "downloads", "likes", "views", "relevance"):
+    for key in ("title", "tags", "description", "downloads", "likes", "views", "relevance", "preview_only", "requires_permission"):
         if extra.get(key) not in (None, "", []):
             option[key] = extra[key]
     return option
