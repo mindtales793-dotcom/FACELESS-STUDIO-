@@ -1,0 +1,45 @@
+name: Quality checks
+
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check Python syntax
+        run: python -m compileall -q main.py motion_render.py narration_engine.py
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Run Python regression tests
+        run: python -m pytest tests -q
+      - name: Check Node syntax
+        run: npm test
+      - name: Install Remotion dependencies
+        working-directory: remotion
+        run: npm install --no-audit --no-fund
+      - name: Check Remotion TypeScript
+        working-directory: remotion
+        run: npx tsc --noEmit
+
+      - name: Build complete source ZIP
+        run: |
+          mkdir -p dist
+          git archive --format=zip --prefix=FACELESS-STUDIO/ HEAD > dist/FACELESS-STUDIO-completo.zip
+      - name: Upload Windows-ready source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: FACELESS-STUDIO-completo
+          path: dist/FACELESS-STUDIO-completo.zip
+          if-no-files-found: error
+          retention-days: 7

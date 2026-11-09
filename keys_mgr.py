@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import os
-import re
-from pathlib import Path
 from typing import Any
 
 import requests
@@ -59,11 +57,20 @@ KEY_DEFINITIONS = [
     {
         "id": "storyblocks",
         "env": "STORYBLOCKS_API_KEY",
-        "name": "Storyblocks",
+        "name": "Storyblocks · API Key",
         "category": "Bancos de Mídia",
-        "blurb": "Acervo profissional de clipes cinematográficos e imagens stock.",
-        "link": "https://www.storyblocks.com",
+        "blurb": "Chave pública para autenticar buscas no Storyblocks.",
+        "link": "https://developer.storyblocks.com/",
         "kind": "video/image",
+    },
+    {
+        "id": "storyblocks_secret",
+        "env": "STORYBLOCKS_API_SECRET",
+        "name": "Storyblocks · Secret Key",
+        "category": "Bancos de Mídia",
+        "blurb": "Chave secreta usada somente no servidor para assinar requisições HMAC. Nunca compartilhe esta chave.",
+        "link": "https://developer.storyblocks.com/",
+        "kind": "secret",
     },
     {
         "id": "youtube",
@@ -90,6 +97,15 @@ KEY_DEFINITIONS = [
         "category": "Inteligência Artificial",
         "blurb": "Geração de imagem (Nano Banana/Imagen) e vídeo (Veo 3.1) via Google AI Studio.",
         "link": "https://aistudio.google.com/app/apikey",
+        "kind": "ai",
+    },
+    {
+        "id": "openrouter",
+        "env": "OPENROUTER_API_KEY",
+        "name": "OpenRouter · IA para busca visual",
+        "category": "Inteligência Artificial",
+        "blurb": "Interpreta cada cena do roteiro e cria consultas visuais. O Gemini e a busca tradicional continuam como fallback.",
+        "link": "https://openrouter.ai/keys",
         "kind": "ai",
     },
     {
@@ -267,18 +283,30 @@ def test_provider_key(key_id: str, key_value: str | None = None) -> dict[str, An
             return {"ok": False, "message": f"YouTube API recusou a chave (código {r.status_code}): {r.text[:200]}"}
 
         elif key_id == "storyblocks":
-            # Testa Storyblocks API v2
-            headers = {"Authorization": f"Bearer {key}", "User-Agent": "FacelessCloudStudio/0.4"}
-            r = requests.get("https://api.storyblocks.com/api/v2/videos/search", headers=headers, params={"keywords": "nature", "num_results": 1}, timeout=15)
+            # A API Storyblocks exige APIKEY + EXPIRES + HMAC-SHA256; não usa Bearer.
+            secret = os.getenv("STORYBLOCKS_API_SECRET", "").strip()
+            if not is_active_key(secret):
+                return {"ok": False, "message": "Informe e salve também a Secret Key do Storyblocks antes de testar."}
+            import storyblocks_mgr
+            try:
+                results = storyblocks_mgr.storyblocks_search(
+                    "nature", key, "video", 1, "landscape",
+                    api_secret=secret, project_id="faceless-connection-test",
+                    user_id="faceless-local-user",
+                )
+                return {"ok": True, "message": f"Storyblocks conectado! Busca de teste retornou {len(results)} resultado(s)."}
+            except Exception as exc:
+                return {"ok": False, "message": str(exc)[:240]}
+
+        elif key_id == "openrouter":
+            r = requests.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {key}", "HTTP-Referer": "http://localhost:3000", "X-Title": "Faceless Studio"},
+                timeout=20,
+            )
             if r.status_code == 200:
-                return {"ok": True, "message": "Conexão com Storyblocks OK!"}
-            if r.status_code in (401, 403):
-                return {"ok": False, "message": f"Storyblocks: chave inválida ou não autorizada ({r.status_code})."}
-            # Alternativa via endpoint graphicstock
-            r2 = requests.get("https://api.graphicstock.com/api/v2/images/search", headers=headers, params={"keywords": "nature", "num_results": 1}, timeout=15)
-            if r2.status_code == 200:
-                return {"ok": True, "message": "Conexão com Storyblocks (GraphicStock) OK!"}
-            return {"ok": False, "message": f"Storyblocks respondeu código {r.status_code}."}
+                return {"ok": True, "message": "OpenRouter conectado! A lista de modelos está acessível."}
+            return {"ok": False, "message": f"OpenRouter respondeu HTTP {r.status_code}: {r.text[:180]}"}
 
         elif key_id == "groq":
             r = requests.get(

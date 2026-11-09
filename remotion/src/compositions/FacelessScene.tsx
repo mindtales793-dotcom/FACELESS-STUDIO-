@@ -1,90 +1,118 @@
-import { AbsoluteFill, addEffect, IFrame, Video, useCurrentFrame, useVideoConfig } from "remotion";
 import React from "react";
+import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 
 export interface FacelessSceneProps {
   text: string;
-  duration: number; // segundos
+  duration: number;
   width: number;
   height: number;
   cor_primaria?: string;
-  estilo?: string; // id do estilo (documentario, noir, etc.)
+  estilo?: string;
 }
 
-export const FacelessScene = React.memo(
-  ({ text, duration, width, height, cor_primaria = "#2F6FED", estilo = "documentario" }: FacelessSceneProps) => {
-    const { duration: videoDuration, width: videoWidth, height: videoHeight, fps } = useVideoConfig();
-    const frame = useCurrentFrame();
-    const seconds = frame / fps;
-    const progress = Math.min(1, seconds / duration);
+const STYLE_COLORS: Record<string, { bg: string; text: string; accent: string }> = {
+  documentario: { bg: "#0B0F19", text: "#EAF2FF", accent: "#2F6FED" },
+  historia_sepia: { bg: "#2B1A0B", text: "#F6EAD0", accent: "#B8860B" },
+  noir: { bg: "#000000", text: "#FFFFFF", accent: "#FF4D5E" },
+  misterio: { bg: "#1A1A2E", text: "#A9CCDE", accent: "#FF4D5E" },
+};
 
-    // Cores por estilo
-    const styleColors: Record<string, { bg: string; text: string; accent: string }> = {
-      documentario: { bg: "#0B0F19", text: "#EAF2FF", accent: "#2F6FED" },
-      historia_sepia: { bg: "#2B1A0B", text: "#F6EAD0", accent: "#B8860B" },
-      noir: { bg: "#000000", text: "#FFFFFF", accent: "#FF4D5E" },
-      misterio: { bg: "#1A1A2E", text: "#A9CCDE", accent: "#FF4D5E" },
-      default: { bg: "#0B0F19", text: "#EAF2FF", accent: cor_primaria },
-    };
+export const FacelessScene: React.FC<FacelessSceneProps> = ({
+  text,
+  duration,
+  cor_primaria = "#2F6FED",
+  estilo = "documentario",
+}) => {
+  const frame = useCurrentFrame();
+  const { fps, width } = useVideoConfig();
+  const safeDuration = Math.max(1, duration);
+  const progress = Math.min(1, frame / (safeDuration * fps));
+  const colors = STYLE_COLORS[estilo] || {
+    bg: "#0B0F19",
+    text: "#EAF2FF",
+    accent: cor_primaria,
+  };
+  const title = text.trim().split(/(?<=[.!?])\s+/)[0] || text.trim();
+  const remainder = text.trim().slice(title.length).trim();
+  const titleSize = Math.max(32, Math.min(76, width * 0.055));
+  const opacity = Math.min(1, progress * 4 + 0.12);
+  const scale = 1.035 - progress * 0.035;
 
-    const colors = styleColors[estilo] || styleColors.default;
-
-    // Efeito de fade-in baseado no progresso
-    const opacity = Math.min(1, progress * 3);
-
-    return (
-      <IFrame
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: colors.bg,
+        color: colors.text,
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "8%",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      <div
         style={{
-          width: videoWidth,
-          height: videoHeight,
-          backgroundColor: colors.bg,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: colors.text,
-          fontFamily: "Arial, sans-serif",
+          width: "100%",
+          maxWidth: 1500,
+          textAlign: "center",
+          opacity,
+          transform: `scale(${scale})`,
         }}
       >
         <div
           style={{
-            textAlign: "center",
-            padding: 40,
-            opacity,
-            transition: "opacity 1s ease-in-out",
-            transform: `scale(${1 - progress * 0.1})`,
+            width: 72,
+            height: 6,
+            margin: "0 auto 34px",
+            borderRadius: 6,
+            backgroundColor: colors.accent,
+          }}
+        />
+        <h1
+          style={{
+            margin: 0,
+            fontSize: titleSize,
+            lineHeight: 1.12,
+            fontWeight: 800,
+            color: colors.text,
           }}
         >
-          <h1 style={{ margin: 0, fontSize: 48, color: colors.accent, fontWeight: 700 }}>
-            {text.split(".")[0]}
-          </h1>
-          <p style={{ marginTop: 20, fontSize: 24, opacity: 0.8 }}>
-            {text.split(".").slice(1).join(".").trim()}
-          </p>
-          <div
+          {title}
+        </h1>
+        {remainder ? (
+          <p
             style={{
-              marginTop: 40,
-              width: 300,
-              height: 4,
-              background: "#333",
-              borderRadius: 2,
-              overflow: "hidden",
+              margin: "28px auto 0",
+              maxWidth: 1100,
+              fontSize: Math.max(22, titleSize * 0.42),
+              lineHeight: 1.35,
+              color: colors.text,
+              opacity: 0.78,
             }}
           >
-            <div
-              style={{
-                width: `${progress * 100}%`,
-                height: "100%",
-                background: colors.accent,
-                transition: "width 0.3s ease",
-              }}
-            />
-          </div>
-          <div style={{ marginTop: 20, fontSize: 16, color: colors.accent, opacity: 0.6 }}>
-            {Math.floor(seconds)}s / {duration}s
-          </div>
+            {remainder}
+          </p>
+        ) : null}
+        <div
+          style={{
+            height: 5,
+            width: "100%",
+            marginTop: 54,
+            backgroundColor: "rgba(255,255,255,0.16)",
+            borderRadius: 8,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${progress * 100}%`,
+              backgroundColor: colors.accent,
+            }}
+          />
         </div>
-      </IFrame>
-    );
-  },
-);
+      </div>
+    </AbsoluteFill>
+  );
+};
 
 FacelessScene.displayName = "FacelessScene";

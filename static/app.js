@@ -18,6 +18,7 @@ function deepMerge(a, b) {
   return out;
 }
 const fmtTime = s => { s = Math.max(0, Math.floor(Number(s) || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${m}:${String(x).padStart(2, '0')}`; };
+const fmtAudioTime = s => { const n = Number(s); return Number.isFinite(n) && n > 0 ? fmtTime(Math.max(1, Math.round(n))) : 'Duração não detectada'; };
 const clock = iso => { try { return new Date(iso).toLocaleTimeString('pt-BR', { hour12: false }); } catch { return ''; } };
 
 /* ---------- ícones */
@@ -110,10 +111,11 @@ const effStyle = cfg => deepMerge(tplById(cfg.template).style, cfg.style || {});
 function defaultCfg() {
   const src = S.catalog.sources;
   const keyed = src.filter(s => s.needs_key && s.ready).map(s => s.id);
-  const sources = keyed.length ? keyed : src.filter(s => !s.needs_key).map(s => s.id);
+  const sources = keyed.length ? keyed : src.filter(s => !s.needs_key && s.id !== 'youtube_frame').map(s => s.id);
   const t = S.catalog.templates[0];
   return {
-    ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', per_source: 3, pacing: t.pacing, search_lang: 'auto', query_extra: '',
+    ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', video_percent: 50, max_video_seconds: 10,
+    openrouter_model: 'google/gemini-2.5-flash', per_source: 3, pacing: t.pacing, search_lang: 'auto', query_extra: '',
     template: t.id, style: {}, autopilot: false, auto_capcut: false,
     audio: { music_id: null, music_volume: t.audio.music_volume, narration_volume: 1, ducking: true, duck_level: 'medium', fade_in: 2, fade_out: 3, loop: true, normalize: false },
   };
@@ -127,7 +129,7 @@ function setVal(ctx, p, v) {
   if (ctx === CREATE) updateSummary();
 }
 const FMT = {
-  pct: v => `${Math.round(v * 100)}%`, size: v => (v * 100).toFixed(1), x2: v => Number(v).toFixed(2),
+  pct: v => `${Math.round(v * 100)}%`, percent: v => `${Math.round(Number(v))}%`, size: v => (v * 100).toFixed(1), x2: v => Number(v).toFixed(2),
   int: v => String(Math.round(Number(v))), sec: v => `${Number(v)} s`, plain: v => String(v),
 };
 
@@ -252,7 +254,11 @@ const PANES = {
       const list = c.sources.filter(s => s.kind === kind);
       return `<div class="src-group"><div class="src-head">${ic(icon)}<h4>${title}</h4></div><div class="src-grid">${list.map(s => {
         const on = cfg.sources.includes(s.id);
-        const pill = !s.needs_key ? '<span class="pill free">sem chave</span>' : s.ready ? '<span class="pill ok">● chave ativa</span>' : `<span class="pill key">falta ${esc(s.env)}</span>`;
+        const pill = s.id === 'youtube_frame'
+          ? '<span class="pill key">opcional · confirme direitos</span>'
+          : s.provider === 'Storyblocks' && !s.ready
+            ? '<span class="pill key">falta API Key + Secret Key</span>'
+            : !s.needs_key ? '<span class="pill free">sem chave</span>' : s.ready ? '<span class="pill ok">● chave ativa</span>' : `<span class="pill key">falta ${esc(s.env)}</span>`;
         return `<label class="src ${on ? 'on' : ''} ${s.ready ? '' : 'dis'}" data-src="${s.id}"><input type="checkbox" data-source="${s.id}" ${on ? 'checked' : ''}><span class="tick">${ic('check')}</span><b>${esc(s.provider)}</b><small>${esc(s.blurb)}</small>${pill}</label>`;
       }).join('')}</div></div>`;
     };
@@ -262,16 +268,24 @@ const PANES = {
       <div class="card-title"><div><h3>De onde vêm as imagens e vídeos?</h3><p>Marque os bancos que o robô deve pesquisar. As fontes sem chave funcionam de imediato.</p></div>
         <div class="quick"><button type="button" class="btn ghost small" data-quick="video">Só vídeos</button><button type="button" class="btn ghost small" data-quick="image">Só fotos</button><button type="button" class="btn ghost small" data-quick="ready">Todas disponíveis</button><button type="button" class="btn ghost small" data-quick="none">Limpar</button></div></div>
       ${group('video', 'Vídeos', 'film')}${group('image', 'Fotos e imagens', 'image')}
-      <p class="hint" style="margin-top:14px">Cada resultado mostra autor, origem e licença. Confira a licença antes de publicar ou monetizar. Pixabay, Unsplash e Coverr têm limites próprios na API.</p>
+      <p class="hint" style="margin-top:14px">Cada resultado mostra autor, origem e licença. Confira a licença antes de publicar ou monetizar. A opção YouTube · miniatura fica desmarcada por padrão e só deve ser usada quando você tiver autorização.</p>
       <p class="hint" style="margin-top:8px"><b>Busca inteligente:</b> o robô traduz o conceito da cena, gera variações de termos e ordena os resultados por relevância, qualidade e popularidade. As consultas ficam em cache por 24 h para economizar chamadas.</p>
     </div>
     <div class="card">
       <div class="card-title"><div><h3>Como o robô escolhe</h3></div></div>
       <div class="grid2">
-        <div class="field"><span>Preferência de tipo</span>${seg(ctx, 'media_pref', [['mixed', 'Misturar'], ['video', 'Preferir vídeo'], ['image', 'Preferir foto']])}<small>A escolha automática dá prioridade ao tipo marcado e evita repetir a mesma mídia.</small></div>
+        <div class="field"><span>Preferência de tipo</span>${seg(ctx, 'media_pref', [['mixed', 'Misturar'], ['video', 'Preferir vídeo'], ['image', 'Preferir foto']])}<small>A preferência atua como desempate; a porcentagem abaixo define a distribuição automática.</small></div>
+        ${slider(ctx, 'video_percent', 'Percentual de cenas em vídeo', 0, 100, 5, 'percent', 'O robô prioriza vídeos nas cenas com maior nota de movimento. O restante recebe imagens.')}
+        ${slider(ctx, 'max_video_seconds', 'Duração máxima de cada clipe', 1, 10, 1, 'sec', 'O limite nunca ultrapassa 10 segundos. Clipes maiores são cortados pelo FFmpeg.')}
         ${slider(ctx, 'per_source', 'Opções por fonte e por cena', 1, 8, 1, 'int', 'Mais opções = mais escolha na revisão, mas mais chamadas às APIs.')}
         <label class="field"><span>Idioma da busca</span><select data-bind="search_lang"><option value="auto" ${cfg.search_lang === 'auto' ? 'selected' : ''}>Automático (detecta pelo texto)</option><option value="pt" ${cfg.search_lang === 'pt' ? 'selected' : ''}>Português</option><option value="en" ${cfg.search_lang === 'en' ? 'selected' : ''}>Inglês</option></select><small>Os bancos retornam mais resultados em inglês.</small></label>
         <label class="field"><span>Palavras extras em toda busca</span><input type="text" data-bind="query_extra" maxlength="60" placeholder="ex.: cinematic, vintage, 4k" value="${esc(cfg.query_extra)}"><small>Entram no final de cada pesquisa para dar um tom ao vídeo.</small></label>
+      </div>
+      <div class="field" style="margin-top:16px">
+        <span>Modelo OpenRouter para interpretar o roteiro</span>
+        <div class="row"><input id="openrouterModelInput" list="openrouterModelList" type="text" data-bind="openrouter_model" maxlength="120" value="${esc(cfg.openrouter_model || 'google/gemini-2.5-flash')}" placeholder="Ex.: google/gemini-2.5-flash" style="flex:1"><button type="button" class="btn ghost small" id="loadOpenRouterModelsBtn">Carregar modelos</button></div>
+        <datalist id="openrouterModelList"></datalist>
+        <small>A chave OPENROUTER_API_KEY é cadastrada em Chaves de API. O OpenRouter é prioritário; se falhar, o estúdio tenta Gemini e depois a busca tradicional.</small>
       </div>
       ${editing ? '<div class="note info" style="margin-top:14px">As fontes valem para <b>Buscar tudo de novo</b>. O ritmo das cenas só pode ser escolhido ao criar o projeto.</div>' : `
       <div class="field" style="margin-top:18px"><span>Ritmo das cenas</span><div class="choices">${Object.entries(c.pacing).map(([k, l]) => `<button type="button" class="choice ${cfg.pacing === k ? 'on' : ''}" data-set="pacing" data-val="${k}"><b>${l}</b><small>${pacingDesc[k] || ''}</small></button>`).join('')}</div></div>`}
@@ -641,10 +655,14 @@ function renderVoice() {
   $e('fishStatus').textContent = S.health?.fish_audio ? 'Fish Audio conectado. As chaves ficam só no servidor.' : 'Configure FISH_API_KEY no arquivo .env (aba Chaves de API) para ativar a geração.';
   const j = v.job;
   $e('ttsProgress').hidden = !j;
-  if (j) { $e('ttsFill').style.width = `${j.progress || 0}%`; $e('ttsPercent').textContent = `${j.progress || 0}%`; $e('ttsMessage').textContent = j.message || 'Gerando…'; }
-  const done = j && j.status === 'complete';
-  const failed = j && j.status === 'failed';
-  const generating = j && j.status === 'generating';
+  if (j) {
+    $e('ttsFill').style.width = `${j.progress || 0}%`;
+    $e('ttsPercent').textContent = `${j.progress || 0}%`;
+    $e('ttsMessage').textContent = j.message || 'Gerando…';
+  }
+  const done = !!j && j.status === 'complete';
+  const failed = !!j && j.status === 'failed';
+  const generating = !!j && (j.status === 'queued' || j.status === 'generating');
   const paused = !!j && j.paused;
   const stepControls = $e('voiceStepControls');
   if (stepControls) {
@@ -653,13 +671,54 @@ function renderVoice() {
     $e('resumeNarration').hidden = !paused;
     $e('redoNarration').hidden = !(failed || paused);
   }
-  const au = $e('genAudio'); au.hidden = !done; if (done && au.getAttribute('src') !== j.audio_url) au.src = j.audio_url;
-  $e('genLinks').hidden = !done; if (done) { $e('dlAudio').href = j.audio_url; $e('dlSrt').href = j.srt_url; }
+
+  // Exibe os blocos reais processados pelo motor, sem disparar um job separado para cada parágrafo.
+  const blocks = j && Array.isArray(j.blocks) ? j.blocks : [];
+  const blocksBox = $e('voiceBlocksBox');
+  const blocksTitle = $e('voiceBlocksTitle');
+  const blocksList = $e('voiceBlocksList');
+  if (blocksBox && blocksTitle && blocksList) {
+    blocksBox.style.display = j ? 'block' : 'none';
+    if (blocks.length) {
+      const finished = blocks.filter(b => b.status === 'complete' || b.status === 'cached').length;
+      blocksTitle.textContent = `${finished} de ${blocks.length} blocos prontos`;
+      blocksList.innerHTML = blocks.map((b, i) => {
+        const status = b.status === 'complete' || b.status === 'cached'
+          ? `✓ Pronto (${fmtTime(b.duration || 0)})`
+          : b.status === 'failed' ? `✗ ${esc(String(b.error || 'Falhou'))}`
+          : 'Na fila / gerando…';
+        const preview = esc(String(b.text || '').slice(0, 120));
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--line)"><div style="font-size:10px;color:var(--muted)">Bloco ${i + 1} · ${status}</div><div style="font-size:11px;color:#eaf2ff;white-space:normal">${preview}</div></div>`;
+      }).join('');
+    } else {
+      blocksTitle.textContent = j ? (j.message || 'Preparando blocos…') : 'Aguardando geração…';
+      blocksList.textContent = '';
+    }
+  }
+
+  const au = $e('genAudio');
+  const audioUrl = done ? (j.audio_url || '') : '';
+  au.hidden = !done;
+  if (audioUrl && au.getAttribute('src') !== audioUrl) {
+    au.src = audioUrl;
+    au.load();
+  } else if (!audioUrl && au.hasAttribute('src')) {
+    au.pause();
+    au.removeAttribute('src');
+    au.load();
+  }
+  $e('genLinks').hidden = !done;
+  if (done) {
+    $e('dlAudio').href = j.audio_download_url || j.audio_url;
+    $e('dlSrt').href = j.srt_url;
+  }
   $e('useNarration').disabled = !done;
   $e('generateNarration').disabled = v.busy || generating || paused;
-  $e('generateNarration').innerHTML = v.busy || generating || paused ? `<span class="spin"></span> ${paused ? 'Pausado' : 'Gerando…'}` : `${ic('spark')} ${failed ? 'Tentar de novo' : 'Gerar narração MP3'}`;
-  if (j && j.status === 'failed') $e('fishStatus').textContent = j.error || j.message;
-  if (done) $e('fishStatus').textContent = `Áudio pronto · ${fmtTime(j.duration)} · SRT estimado gerado.`;
+  $e('generateNarration').innerHTML = v.busy || generating || paused
+    ? `<span class="spin"></span> ${paused ? 'Pausado' : 'Gerando…'}`
+    : `${ic('spark')} ${failed ? 'Tentar de novo' : 'Gerar narração MP3'}`;
+  if (failed) $e('fishStatus').textContent = j.error || j.message || 'A geração falhou.';
+  if (done) $e('fishStatus').textContent = `Áudio pronto · ${fmtAudioTime(j.duration)} · MP3 completo disponível para reprodução e download.`;
   if (paused) $e('fishStatus').textContent = 'Narração pausada. Clique em Retomar para continuar.';
 }
 document.addEventListener('input', e => {
@@ -738,20 +797,28 @@ async function voiceClick(t) {
     try { await api(`/api/narrations/${v.job.id}/redo`, { method: 'POST' }); v.job = { status: 'queued', progress: 0, message: 'Recomeçando…', paused: false }; v.busy = true; renderVoice(); pollNarration(v.job.id); }
     catch (err) { toast(err.message); v.busy = false; renderVoice(); } finally { btn.disabled = false; }
   } else if (btn.id === 'generateNarration') {
-    if (!v.script.trim()) return toast('Cole o roteiro para narrar.');
-    const blocks = v.script.split(/\n\s*\n/).filter(b => b.trim()).map(b => b.trim());
-    if (!blocks.length) return toast('Não foi possível dividir o roteiro em blocos.');
+    const script = v.script.trim();
+    if (!script) return toast('Cole o roteiro para narrar.');
     v.busy = true;
-    v.blocks = [];
-    v.blockJobs = [];
-    v.blockIndex = 0;
-    v.blocksTotal = blocks.length;
-    document.getElementById('voiceBlocksBox').style.display = 'block';
-    document.getElementById('voiceBlocksTitle').textContent = `Gerando ${blocks.length} bloco${blocks.length !== 1 ? 's' : ''}…`;
-    document.getElementById('voiceBlocksList').innerHTML = '';
-    v.job = { progress: 0, message: 'Gerando narração em blocos…' };
+    v.job = { status: 'queued', progress: 0, message: 'Enviando o roteiro completo para o motor de narração…' };
     renderVoice();
-    processNextBlock(blocks);
+    try {
+      // Um único job recebe o roteiro inteiro; o motor divide, gera, une e valida o MP3.
+      const job = await jpost('/api/narrations', {
+        text: script,
+        reference_id: v.voiceId || null,
+        model: v.model
+      });
+      if (!job || !job.id) throw new Error('O servidor não retornou o identificador da narração.');
+      v.job = { ...job, status: job.status || 'queued', message: job.message || 'Narração adicionada à fila.' };
+      renderVoice();
+      pollNarration(job.id);
+    } catch (err) {
+      v.busy = false;
+      v.job = { status: 'failed', progress: 0, message: err.message, error: err.message };
+      renderVoice();
+      toast(err.message);
+    }
   } else if (btn.id === 'useNarration') useNarration(btn);
 }
 async function pollNarration(id) {
@@ -764,65 +831,6 @@ async function pollNarration(id) {
   } catch (err) { v.busy = false; v.job = { status: 'failed', error: err.message }; renderVoice(); }
 }
 
-async function processNextBlock(blocks) {
-  const v = S.voice;
-  if (v.blockIndex >= blocks.length) {
-    v.busy = false;
-    v.job = { status: 'complete', progress: 100, message: 'Todos os blocos gerados.', audio_url: null, srt_url: null, duration: 0 };
-    renderVoice();
-    document.getElementById('voiceBlocksTitle').textContent = `Todos os ${blocks.length} blocos gerados.`;
-    toast('Todos os blocos gerados!');
-    return;
-  }
-  const text = blocks[v.blockIndex];
-  const label = text.slice(0, 50) + (text.length > 50 ? '…' : '');
-  const list = document.getElementById('voiceBlocksList');
-  const item = document.createElement('div');
-  item.id = `block-${v.blockIndex}`;
-  item.style.marginBottom = '6px';
-  item.style.padding = '6px';
-  item.style.border = '1px solid var(--line)';
-  item.style.borderRadius = '8px';
-  item.style.background = '#0b1224';
-  item.innerHTML = `<div style="font-size:10.5px;color:var(--muted);margin-bottom:2px">${v.blockIndex + 1} / ${blocks.length}</div><div style="font-size:11px;color:#eaf2ff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</div><div style="font-size:10px;color:var(--dim);margin-top:2px">Gerando…</div>`;
-  list.appendChild(item);
-  list.scrollTop = list.scrollHeight;
-  try {
-    const job = await jpost('/api/narrations', { text, reference_id: v.voiceId || null, model: v.model });
-    await pollNarrationBlock(job.id, v.blockIndex, blocks);
-  } catch (err) {
-    const item = document.getElementById(`block-${v.blockIndex}`);
-    if (item) item.querySelector('div:last-child').textContent = `Erro: ${err.message}`;
-    v.blockIndex++;
-    setTimeout(() => processNextBlock(blocks), 1000);
-  }
-}
-
-async function pollNarrationBlock(id, index, blocks) {
-  const v = S.voice;
-  try {
-    const j = await api(`/api/narrations/${id}`);
-    const item = document.getElementById(`block-${index}`);
-    if (j.status === 'complete') {
-      if (item) item.querySelector('div:last-child').textContent = `✓ Pronto (${fmtTime(j.duration || 0)})`;
-      v.blockJobs = v.blockJobs || [];
-      v.blockJobs.push(j);
-      v.job = j; // último bloco completo, para "Usar no projeto"
-      v.blockIndex++;
-      setTimeout(() => processNextBlock(blocks), 800);
-    } else if (j.status === 'failed') {
-      if (item) item.querySelector('div:last-child').textContent = `✗ Falhou: ${j.error}`;
-      v.blockIndex++;
-      setTimeout(() => processNextBlock(blocks), 800);
-    } else {
-      if (item) item.querySelector('div:last-child').textContent = `Gerando… ${j.progress || 0}%`;
-      setTimeout(() => pollNarrationBlock(id, index, blocks), 2000);
-    }
-  } catch (err) {
-    v.blockIndex++;
-    setTimeout(() => processNextBlock(blocks), 1000);
-  }
-}
 async function useNarration(btn) {
   const j = S.voice.job; if (!j || j.status !== 'complete') return;
   btn.disabled = true;
@@ -1090,7 +1098,7 @@ $('#projectList').addEventListener('click', async e => {
   const open = e.target.closest('[data-open]'); if (open) openProject(open.dataset.open);
 });
 
-const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo' };
+const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo', 'media-library': 'viewMediaLibrary' };
 function showView(name) {
   Object.keys(VIEW_ID).forEach(v => {
     const el = $('#' + VIEW_ID[v]);
@@ -1105,9 +1113,98 @@ function showView(name) {
   if (name === 'groq') loadGroqView();
   if (name === 'skills') loadSkillsView();
   if (name === 'skills-video') loadSkillsVideoView();
+  if (name === 'media-library') checkStoryblocksConnection();
 }
 
+/* ---------- Biblioteca de Mídia Storyblocks */
+async function checkStoryblocksConnection() {
+  const status = $('#storyblocksConnectionStatus');
+  if (!status) return;
+  status.textContent = 'Verificando...';
+  status.className = 'chip';
+  try {
+    const res = await jpost('/api/keys/test', { key_id: 'storyblocks' });
+    status.textContent = res.message || (res.ok ? 'Storyblocks conectado' : 'Falha na conexão');
+    status.className = res.ok ? 'chip ok' : 'chip warn';
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = 'chip warn';
+  }
+}
+function renderStoryblocksResults(items) {
+  const host = $('#storyblocksResults');
+  if (!host) return;
+  if (!items.length) {
+    host.innerHTML = '<div class="empty" style="grid-column:1/-1">Nenhum resultado encontrado. Tente outras palavras-chave.</div>';
+    return;
+  }
+  host.innerHTML = items.map(item => {
+    const isVideo = item.media_type === 'video';
+    const preview = item.thumbnail || item.download_url || '';
+    const media = isVideo
+      ? (preview ? `<video src="${esc(item.download_url || preview)}" poster="${esc(preview)}" controls muted preload="none" playsinline></video>` : '<div class="empty">Prévia indisponível</div>')
+      : `<img src="${esc(preview)}" alt="${esc(item.title || 'Imagem Storyblocks')}" loading="lazy">`;
+    return `
+      <article class="media-result-card">
+        <div class="media-result-preview">${media}<span class="media-type-tag">${isVideo ? 'VÍDEO' : 'IMAGEM'}</span></div>
+        <div class="media-result-body">
+          <strong title="${esc(item.title || '')}">${esc(item.title || 'Mídia Storyblocks')}</strong>
+          <div class="media-result-meta">${item.duration ? fmtTime(item.duration) + ' · ' : ''}${item.width && item.height ? esc(item.width + ' × ' + item.height) : 'Prévia disponível'}</div>
+          <div class="media-result-actions"><a class="btn small primary" href="${esc(item.source_url || 'https://www.storyblocks.com')}" target="_blank" rel="noopener noreferrer">Ver licença e download</a></div>
+        </div>
+      </article>`;
+  }).join('');
+}
+async function searchStoryblocks(event) {
+  event?.preventDefault();
+  const query = ($('#storyblocksQuery')?.value || '').trim();
+  if (query.length < 2) return toast('Digite pelo menos dois caracteres.');
+  const host = $('#storyblocksResults'), btn = $('#storyblocksSearchBtn'), meta = $('#storyblocksResultMeta');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Pesquisando...'; }
+  if (host) host.innerHTML = '<div class="empty" style="grid-column:1/-1"><span class="spin"></span><br>Buscando no Storyblocks...</div>';
+  if (meta) meta.textContent = 'Pesquisando: ' + query;
+  try {
+    const result = await jpost('/api/storyblocks/search', {
+      query,
+      media_type: $('#storyblocksType')?.value || 'video',
+      orientation: $('#storyblocksOrientation')?.value || 'landscape',
+      per: Number($('#storyblocksPer')?.value || 12),
+      project_id: S.projectId || 'faceless-media-library',
+    });
+    renderStoryblocksResults(result.results || []);
+    if (meta) meta.textContent = (result.total || 0) + ' resultado(s) para “' + result.query + '”.';
+  } catch (err) {
+    if (host) host.innerHTML = '<div class="form-error" style="grid-column:1/-1">' + esc(err.message) + '</div>';
+    if (meta) meta.textContent = 'A pesquisa não foi concluída.';
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = ic('search') + ' Pesquisar'; }
+  }
+}
+$('#storyblocksSearchForm')?.addEventListener('submit', searchStoryblocks);
+$('#storyblocksCheckBtn')?.addEventListener('click', checkStoryblocksConnection);
+
+/* ---------- Modelos OpenRouter */
+async function loadOpenRouterModels() {
+  const btn = $('#loadOpenRouterModelsBtn');
+  const list = $('#openrouterModelList');
+  if (btn) { btn.disabled = true; btn.textContent = 'Carregando…'; }
+  try {
+    const data = await api('/api/openrouter/models');
+    if (!list) return;
+    list.innerHTML = (data.models || []).map(model => `<option value="${esc(model.id)}">`).join('');
+    toast((data.models || []).length + ' modelos OpenRouter carregados.');
+  } catch (err) {
+    toast('Não foi possível carregar modelos: ' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Carregar modelos'; }
+  }
+}
+document.addEventListener('click', event => {
+  if (event.target.closest('#loadOpenRouterModelsBtn')) loadOpenRouterModels();
+});
+
 /* ---------- View Skills de Vídeo (Estilos de Edição) */
+
 async function loadSkillsVideoView() {
   const list = $('#skillsVideoList');
   const count = $('#skillsVideoCount');
@@ -1224,8 +1321,8 @@ async function renderMotionScene() {
     const res = await jpost('/api/motion/render', {
       text,
       duration,
-      width: 1920,
-      height: 1080,
+      width: 1280,
+      height: 720,
       cor_primaria: estilo.cor_primaria || '#2F6FED',
       estilo: estilo.id || 'documentario',
     });
@@ -1347,9 +1444,9 @@ function renderKeysGrid() {
       </div>
 
       <div class="row" style="margin-top:6px">
-        <button type="button" class="btn ghost small test-key-btn" data-key-id="${esc(k.id)}">
+        ${k.kind === 'secret' ? '' : `<button type="button" class="btn ghost small test-key-btn" data-key-id="${esc(k.id)}">
           ${ic('spark')} Testar chave
-        </button>
+        </button>`}
         <button type="button" class="btn small save-single-key-btn" data-key-id="${esc(k.id)}" data-key-env="${esc(k.env)}">
           ${ic('check')} Salvar
         </button>
@@ -2243,7 +2340,7 @@ $('#saveAllKeysBtn')?.addEventListener('click', () => {
 });
 
 $('#testAllKeysBtn')?.addEventListener('click', async () => {
-  const btns = $$('#keysCardsGrid .test-key-btn');
+  const btns = $$('#keysCardsGrid .test-key-btn').filter(btn => btn.dataset.keyId !== 'storyblocks_secret');
   for (const btn of btns) {
     await testSingleKey(btn.dataset.keyId, btn);
   }

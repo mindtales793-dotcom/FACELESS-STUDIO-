@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -293,7 +295,16 @@ class NarrationCache:
 
     def put(self, fingerprint: str, file_name: str, duration: float,
             text: str, reference_id: str | None, model: str,
-            speed: float, stability: float, expressiveness: float) -> None:
+            speed: float, stability: float, expressiveness: float,
+            source_file: Path | None = None) -> None:
+        """Persiste o áudio no diretório global do cache antes de indexá-lo."""
+        target = self.dir / file_name
+        if source_file and source_file.exists():
+            temporary = self.dir / f"{fingerprint}.{uuid.uuid4().hex}.tmp"
+            shutil.copy2(source_file, temporary)
+            temporary.replace(target)
+        if not target.exists():
+            raise RuntimeError("Não foi possível persistir o áudio no cache.")
         self._index[fingerprint] = {
             "file": file_name,
             "duration": duration,
@@ -434,13 +445,55 @@ class NarrationEngine:
                 "cached_blocks": state["cached_blocks"],
                 "pending_blocks": state["pending_blocks"]}
 
+    def _probe_audio_duration(self, audio_path: Path) -> float:
+        """Lê a duração do arquivo final, sem confiar na soma dos blocos."""
+        if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+            return 0.0
+        try:
+            probe = subprocess.run(
+                [ffprobe_path(), "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+                capture_output=True, text=True, timeout=45,
+            )
+            if probe.returncode != 0:
+                return 0.0
+            duration = float(probe.stdout.strip())
+            return duration if math.isfinite(duration) and duration > 0 else 0.0
+        except (OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError):
+            return 0.0
+
     def get_job(self, job_id: str) -> dict[str, Any]:
-        """Retorna o estado público do job."""
+        """Retorna o estado público do job, recuperando a duração se ela estiver ausente."""
         state = self._read_job(job_id)
         public = {k: v for k, v in state.items()
                   if k not in ("chunks", "reference_id")}
         if state.get("status") == "complete":
-            public["audio_url"] = f"/api/narrations/{job_id}/download"
+            audio_path = self._job_dir(job_id) / state.get("audio_file", "narration.mp3")
+            srt_path = self._job_dir(job_id) / state.get("srt_file", "narration.srt")
+            if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail="A geração terminou, mas o MP3 final não foi encontrado ou está vazio.",
+                )
+            if not srt_path.is_file() or srt_path.stat().st_size <= 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail="A geração terminou, mas o arquivo de legendas não foi encontrado ou está vazio.",
+                )
+
+            try:
+                saved_duration = float(state.get("duration") or 0)
+            except (TypeError, ValueError):
+                saved_duration = 0.0
+            if not math.isfinite(saved_duration) or saved_duration <= 0:
+                measured_duration = self._probe_audio_duration(audio_path)
+                if measured_duration > 0:
+                    state["duration"] = round(measured_duration, 2)
+                    self._write_job(job_id, state)
+                    public["duration"] = state["duration"]
+
+            public["audio_url"] = f"/api/narrations/{job_id}/audio"
+            public["audio_download_url"] = f"/api/narrations/{job_id}/download"
             public["srt_url"] = f"/api/narrations/{job_id}/subtitles"
         public["paused"] = bool(state.get("paused"))
         public["cancelled"] = bool(state.get("cancelled"))
@@ -568,32 +621,31 @@ class NarrationEngine:
             ffmpeg = ffmpeg_path()
             ffprobe = ffprobe_path()
 
-            # Teste rápido de conexão
-            try:
-                fish_tts_bytes("ok", reference_id, model, api_key,
-                               speed, stability, expressiveness)
-            except Exception as conn_exc:
-                raise RuntimeError(
-                    "Não foi possível conectar ao Fish Audio. Verifique sua "
-                    f"chave FISH_API_KEY e a conexão com a internet. Detalhe: {conn_exc}"
-                )
-
-            # Filtra blocos que precisam ser gerados (não estão em cache)
-            blocks_to_generate = [
-                (i, b) for i, b in enumerate(blocks)
-                if not b.get("cached") and b.get("status") != "complete"
-            ]
-
+            # Não faz chamada TTS de teste: a primeira geração real valida a chave
+            # e evita gastar uma requisição adicional com o texto artificial "ok".
             total_blocks = len(blocks)
-            completed_blocks = sum(1 for b in blocks if b.get("status") == "complete")
             durations: list[float] = [0.0] * total_blocks
             files: list[Path] = [None] * total_blocks  # type: ignore
+            blocks_to_generate: list[tuple[int, dict[str, Any]]] = []
 
-            # Preenche durações de blocos em cache
-            for b in blocks:
-                if b.get("cached") and b.get("duration") is not None:
-                    idx = b["index"]
-                    durations[idx] = b["duration"]
+            # Restaura cada hit do cache para a pasta deste job. O arquivo global
+            # permanece intacto e pode ser reutilizado por futuras narrações.
+            for idx, b in enumerate(blocks):
+                cached = self.cache.get(b["fingerprint"]) if b.get("cached") else None
+                if cached:
+                    cached_file = self.cache.dir / cached["file"]
+                    job_file = folder / f"chunk_{idx:03d}.mp3"
+                    shutil.copy2(cached_file, job_file)
+                    files[idx] = job_file
+                    durations[idx] = max(0.25, float(cached.get("duration") or 0.25))
+                    b["status"] = "complete"
+                    b["duration"] = durations[idx]
+                else:
+                    b["cached"] = False
+                    b["status"] = "pending"
+                    blocks_to_generate.append((idx, b))
+
+            completed_blocks = sum(1 for b in blocks if b.get("status") == "complete")
 
             # Processa em paralelo com concorrência controlada
             executor = ThreadPoolExecutor(max_workers=max_concurrent)
@@ -608,7 +660,11 @@ class NarrationEngine:
                     b["status"] = "complete"
                     b["cached"] = True
                     b["duration"] = cached.get("duration")
-                    durations[idx] = cached.get("duration", 0.0)
+                    durations[idx] = max(0.25, float(cached.get("duration") or 0.25))
+                    cached_file = self.cache.dir / cached["file"]
+                    job_file = folder / f"chunk_{idx:03d}.mp3"
+                    shutil.copy2(cached_file, job_file)
+                    files[idx] = job_file
                     completed_blocks += 1
                     continue
 
@@ -656,9 +712,10 @@ class NarrationEngine:
 
                     # Salva no cache
                     fp = b["fingerprint"]
-                    self.cache.put(fp, chunk_file.name, durations[idx],
+                    self.cache.put(fp, f"{fp}.mp3", durations[idx],
                                    b["text"], reference_id, model,
-                                   speed, stability, expressiveness)
+                                   speed, stability, expressiveness,
+                                   source_file=chunk_file)
 
                     completed_blocks += 1
                     progress = int(80 * completed_blocks / total_blocks) if total_blocks else 100
@@ -689,7 +746,7 @@ class NarrationEngine:
             self._write_job(job_id, state)
 
             output = folder / "narration.mp3"
-            self._merge_audio(files, durations, output, ffmpeg)
+            final_duration = self._merge_audio(files, durations, output, ffmpeg)
 
             # SRT
             srt_text = build_estimated_srt(chunks, durations)
@@ -706,7 +763,7 @@ class NarrationEngine:
                 "message": "Narração pronta. As legendas geradas têm tempos estimados.",
                 "audio_file": output.name,
                 "srt_file": "narration.srt",
-                "duration": round(sum(durations), 2),
+                "duration": round(final_duration, 2),
                 "updated_at": now_iso(),
             })
             state.pop("chunks", None)
@@ -755,7 +812,7 @@ class NarrationEngine:
         return audio_bytes, duration
 
     def _merge_audio(self, files: list[Path], durations: list[float],
-                     output: Path, ffmpeg: str) -> None:
+                     output: Path, ffmpeg: str) -> float:
         """Une todos os áudios com FFmpeg, adicionando pausas naturais."""
         # Cria arquivo de concat com pausas
         concat_lines: list[str] = []
@@ -763,12 +820,17 @@ class NarrationEngine:
 
         # Cria um arquivo de silêncio de 0.3s para pausas entre blocos
         pause_file = output.parent / "pause_03s.mp3"
-        subprocess.run(
+        pause_result = subprocess.run(
             [ffmpeg, "-y", "-f", "lavfi", "-i",
-             "anoisesrc=d=0.3:r=44100:c=mono", "-c:a", "libmp3lame",
-             "-b:a", "128k", str(pause_file)],
+             "anullsrc=r=44100:cl=mono", "-t", "0.3",
+             "-c:a", "libmp3lame", "-b:a", "128k", str(pause_file)],
             capture_output=True, text=True, timeout=60,
         )
+        if pause_result.returncode != 0 or not pause_file.is_file() or pause_file.stat().st_size == 0:
+            raise RuntimeError(
+                "FFmpeg não conseguiu criar o silêncio entre os blocos: "
+                f"{(pause_result.stderr or pause_result.stdout)[-800:]}"
+            )
 
         all_files: list[Path] = []
         for i, f in enumerate(files):
@@ -790,11 +852,29 @@ class NarrationEngine:
         )
         if merge.returncode != 0:
             raise RuntimeError(f"Falha ao juntar os trechos de áudio: {(merge.stderr or merge.stdout)[-1600:]}")
+        if not output.is_file() or output.stat().st_size < 128:
+            raise RuntimeError("O FFmpeg terminou, mas não criou um MP3 final válido.")
+        validation = subprocess.run(
+            [ffprobe_path(), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(output)],
+            capture_output=True, text=True, timeout=60,
+        )
+        try:
+            final_duration = float(validation.stdout.strip())
+        except (TypeError, ValueError):
+            final_duration = 0.0
+        if validation.returncode != 0 or not math.isfinite(final_duration) or final_duration <= 0:
+            raise RuntimeError(
+                "O MP3 final foi criado, mas não passou na validação de reprodução: "
+                f"{(validation.stderr or validation.stdout)[-800:]}"
+            )
 
         # Limpeza
         concat_file.unlink(missing_ok=True)
         if pause_file and pause_file.exists():
             pause_file.unlink(missing_ok=True)
+
+        return final_duration
 
     # ------------------------------------------------------------------
     # Download
@@ -803,7 +883,10 @@ class NarrationEngine:
         state = self._read_job(job_id)
         if state.get("status") != "complete":
             raise HTTPException(status_code=409, detail="A narração ainda não está pronta.")
-        return self._job_dir(job_id) / state.get("audio_file", "narration.mp3")
+        audio_path = self._job_dir(job_id) / state.get("audio_file", "narration.mp3")
+        if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+            raise HTTPException(status_code=404, detail="O MP3 final não existe ou está vazio.")
+        return audio_path
 
     def get_srt_file(self, job_id: str) -> Path:
         state = self._read_job(job_id)

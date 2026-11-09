@@ -1,23 +1,24 @@
 {
   "name": "faceless-remotion",
-  "version": "1.0.0",
-  "description": "Remotion compositions for Faceless Cloud Studio",
+  "version": "1.1.0",
+  "description": "Renderizador de cenas animadas do Faceless Cloud Studio com Remotion",
   "private": true,
   "scripts": {
-    "build": "remotion bundle ./src/index.ts ./build/bundle.zip",
-    "render": "remotion render ./src/index.ts FacelessScene ./out/video.mp4 --codec=h264 --fps=24 --props-file=./props.json",
-    "render-video": "remotion render ./src/index.ts FacelessScene ./out/video.mp4 --codec=h264 --fps=24"
+    "render": "node render.js ./props.json ./out/video.mp4",
+    "bundle": "remotion bundle src/index.ts build",
+    "browser:ensure": "remotion browser ensure",
+    "check": "node --check render.js"
   },
   "dependencies": {
-    "@remotion/renderer": "^4.0.541",
-    "remotion": "^4.0.0"
+    "@remotion/renderer": "4.0.541",
+    "remotion": "4.0.541",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
-    "@remotion/bundler": "^4.0.541",
-    "@remotion/web-renderer": "^4.0.541",
-    "@types/react": "^18.2.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "typescript": "^5.0.0"
+    "@remotion/bundler": "4.0.541",
+    "@remotion/cli": "4.0.541",
+    "@types/react": "19.2.2",
+    "typescript": "5.6.3"
   }
 }

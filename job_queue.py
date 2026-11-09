@@ -9,13 +9,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from store import DATA_DIR, now_iso
+from store import DATA_DIR
 
 JOBS_DIR = DATA_DIR / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)

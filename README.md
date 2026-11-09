@@ -24,11 +24,69 @@ python -m uvicorn main:app --port 3000
 Docker: `docker build -t fcs . && docker run -p 3000:3000 --env-file .env -v $PWD/data:/app/data fcs`.
 Defina `APP_PASSWORD` se publicar na internet. Use `DATA_DIR` em disco persistente.
 
+## Remotion real (renderização de cenas animadas)
+
+O render de cenas usa o Remotion de verdade (React + Chromium), não um fundo estático gerado pelo FFmpeg.
+
+**Windows**
+1. Instale Node.js 20 LTS ou superior.
+2. Na pasta principal do projeto, execute `INSTALAR_REMOTION_WINDOWS.bat` uma vez. O script instala as dependências e prepara o Chromium.
+3. Inicie o Faceless Studio normalmente com `INICIAR_WINDOWS.bat`.
+4. Na aba de estilos de vídeo, selecione um estilo, escreva o texto da cena e clique em **Renderizar Cena Remotion**.
+
+**Linux/macOS**
+```bash
+cd remotion
+npm install
+npx remotion browser ensure
+cd ..
+python -m uvicorn main:app --port 3000
+```
+
+O render padrão da interface é 720p para reduzir o uso de memória e CPU. A API aceita até Full HD dentro do limite de resolução. A primeira renderização demora mais porque precisa montar o bundle do Remotion; as seguintes reutilizam o cache de cenas idênticas.
+
+Se o Chromium não iniciar, confirme que o navegador do Remotion foi instalado e que o Node.js está no PATH. A variável opcional `REMOTION_CHROMIUM_EXECUTABLE_PATH` permite informar o caminho de um Chromium/Chrome compatível.
+
 ## Fluxo
 1. **Arquivos**: narração (MP3/WAV/M4A) e SRT. Sem narração? Gere pela Fish Audio na própria aba.
 2. **Mídia, Estilo, Áudio, Saída**: escolha fontes, template, música e formato (16:9, 9:16, 1:1; 720p/1080p).
 3. O robô busca e pré-escolhe a mídia. Revise as cenas (trocar opção, buscar de novo, enviar arquivo seu, gerar com IA). Com **piloto automático** ele monta direto.
 4. Baixe o MP4 e, se quiser, o pacote do CapCut.
+
+## Fila de montagem e lote
+As montagens entram numa **fila global** e rodam uma por vez (`MAX_CONCURRENT_RENDERS`, padrão 1), para não travar o computador. Quem espera fica em "Montagem na fila" e pode ser cancelado. O piloto automático usa a mesma fila.
+- `POST /api/projects/render-batch` enfileira vários projetos de uma vez (sem corpo = todos os que estão prontos para montar; ou `{"ids": [...]}`) e devolve o que entrou e o que foi ignorado, com o motivo.
+- `GET /api/render-queue` mostra o que está montando e o que espera.
+- Se o servidor cair ou for reiniciado no meio de uma busca ou montagem, ao subir de novo o projeto volta a "pronto" com suas escolhas mantidas (antes ficava preso em "montando").
+
+## Google Flow e MCP: como funciona de verdade
+O Google Flow **não tem API pública**. Existem MCPs da comunidade que automatizam o site do Flow dentro de um Chrome logado; são frágeis e podem violar os termos do serviço, por isso não os embutimos.
+Aqui usamos os **mesmos modelos pela Gemini API** (`GEMINI_API_KEY`): Nano Banana (imagem) e Veo (vídeo, `FLOW_VIDEO_MODEL`). Consequências: o Veo é **cobrado por segundo** na sua chave, e os clipes **não aparecem no seu projeto do Flow**.
+
+`mcp_server.py` expõe como MCP: `flow_status`, `flow_generate_image`, `flow_generate_video`, `list_studio_projects`, `studio_project_status`. Exemplo (Claude Desktop / Claude Code):
+```json
+{"mcpServers": {"faceless-studio": {"command": "python", "args": ["/caminho/mcp_server.py"],
+  "env": {"GEMINI_API_KEY": "...", "DATA_DIR": "/caminho/data"}}}}
+```
+
+## Importar no CapCut
+Baixe o zip → extraia → feche o CapCut → rode `INSTALAR_NO_CAPCUT.bat` (precisa de Python no Windows) → abra o CapCut. O instalador faz backup do `root_meta_info.json`.
+**Limites:** feito para o CapCut desktop 8.x e **não foi testado no CapCut real** (o formato muda entre versões). Cor do template, vinheta, transições, ducking e os destaques na tela (cartões, etiquetas) ficam só no MP4. Se não abrir, use `legendas.srt` e a pasta Resources manualmente.
+
+## Busca visual inteligente e distribuição de mídia
+
+- **OpenRouter (OPENROUTER_API_KEY)**: interpreta cada bloco da narração junto de uma amostra do contexto geral do roteiro e retorna consultas visuais, uma descrição da cena, o tipo de mídia recomendado e uma nota de movimento de 0 a 100.
+- **Fallback em cascata**: se OpenRouter não estiver configurado ou falhar, tenta Gemini (GEMINI_API_KEY); sem os dois, usa a busca tradicional por palavras-chave. O modelo pode ser definido em OPENROUTER_MODEL ou no campo de modelo da aba Mídia. A lista de modelos pode ser carregada no próprio painel.
+- **Distribuição imagem/vídeo**: o controle de 0% a 100% define a quantidade-alvo de cenas em vídeo. A IA prioriza vídeo nas cenas com maior necessidade de movimento. Quando uma das fontes selecionadas não oferece o tipo desejado, a cena usa uma alternativa disponível e fica marcada como fallback.
+- **Limite de clipe**: todo vídeo usado na montagem é verificado e, se necessário, cortado pelo FFmpeg para até 10 segundos (ou menos, conforme a configuração). O áudio original do B-roll é removido para não competir com a narração. Se o FFmpeg falhar, o arquivo longo não é aceito como se estivesse dentro do limite.
+- **YouTube · quadro**: fonte opcional, desmarcada por padrão. Baixa apenas um trecho de até 10 segundos do candidato e extrai um quadro estático desse trecho; o clipe de vídeo não entra na timeline. Use somente conteúdo próprio ou com autorização. A existência de um link público não concede licença de reutilização.
+- **Storyblocks**: a aba Biblioteca de Mídia pesquisa e mostra prévias. A autenticação usa STORYBLOCKS_API_KEY e STORYBLOCKS_API_SECRET com assinatura HMAC no servidor. As prévias não são arquivos licenciados para o render: abra a página do ativo e faça o download conforme sua licença/conta. Não coloque credenciais no navegador nem no Git.
+
+A API de chat do OpenRouter usa o formato compatível com Chat Completions e seu catálogo de modelos é consultado em /api/v1/models. Consulte a [documentação oficial de autenticação](https://openrouter.ai/docs/api_reference/authentication), [Chat Completions](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request) e [catálogo de modelos](https://openrouter.ai/docs/api/api-reference/models/get-models).
+
+## Licenças e limites
+Cada mídia mostra autor, origem e licença (há lista de créditos no projeto pronto). Confira antes de monetizar. Pixabay (cache 24 h), Unsplash (rastreio de download) e Coverr (crédito) têm regras próprias, já respeitadas. Fontes: Poppins, Anton, Bebas Neue, Archivo Black, DM Serif Display, Cinzel, EB Garamond (OFL, em `static/fonts`).
+Render em 1080p é pesado em servidores com pouca CPU; valide em 720p.
 
 ## Google Flow e MCP: como funciona de verdade
 O Google Flow **não tem API pública**. Existem MCPs da comunidade que automatizam o site do Flow dentro de um Chrome logado; são frágeis e podem violar os termos do serviço, por isso não os embutimos.

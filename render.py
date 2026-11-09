@@ -64,6 +64,8 @@ def _ext_for(url: str, media_type: str) -> str:
 
 
 def _fetch_option(folder: Path, option: dict[str, Any]) -> Path:
+    if option.get("preview_only"):
+        raise RuntimeError("Esta é apenas uma prévia. Abra a página do provedor e baixe a mídia licenciada pela sua conta.")
     if option.get("local_file"):
         path = folder / option["local_file"]
         if not path.exists():
@@ -71,12 +73,38 @@ def _fetch_option(folder: Path, option: dict[str, Any]) -> Path:
         return path
     media_type = option.get("media_type", "video")
     url = option["download_url"]
+    if not url:
+        raise RuntimeError("Esta opção não possui arquivo de mídia para baixar.")
     media_dir = folder / "media"
     media_dir.mkdir(exist_ok=True)
     dest = media_dir / f"{hashlib.sha1(url.encode()).hexdigest()[:16]}{_ext_for(url, media_type)}"
     if dest.exists() and dest.stat().st_size > 0:
         return dest
     import os
+    if option.get("frame_from_video"):
+        # Extrai somente um quadro de um trecho limitado a dez segundos.
+        # A fonte YouTube é opcional e deve ser usada apenas com autorização.
+        import youtube_mgr
+        video_temp = media_dir / f"ytframe_{hashlib.sha1(url.encode()).hexdigest()[:16]}.mp4"
+        ffmpeg = ffmpeg_path()
+        try:
+            youtube_mgr.download_youtube_video(url, video_temp, max_duration=10)
+            duration = float(media_duration(video_temp) or 0)
+            if duration <= 0:
+                raise RuntimeError("Não foi possível detectar a duração do trecho do YouTube.")
+            if not ffmpeg or not Path(ffmpeg).exists():
+                raise RuntimeError("FFmpeg é necessário para extrair o quadro do vídeo.")
+            timestamp = min(9.0, max(0.1, duration / 2))
+            subprocess.run(
+                [str(ffmpeg), "-y", "-ss", f"{timestamp:.3f}", "-i", str(video_temp),
+                 "-frames:v", "1", "-vf", "scale=1280:-2", "-q:v", "2", str(dest)],
+                capture_output=True, text=True, timeout=90, check=True,
+            )
+            if not dest.exists() or dest.stat().st_size < 1024:
+                raise RuntimeError("O FFmpeg não conseguiu salvar o quadro extraído.")
+            return dest
+        finally:
+            video_temp.unlink(missing_ok=True)
     if option.get("provider") == "YouTube" or "youtube.com" in url or "youtu.be" in url:
         import youtube_mgr
         youtube_mgr.download_youtube_video(url, dest)
@@ -93,6 +121,51 @@ def _fetch_option(folder: Path, option: dict[str, Any]) -> Path:
     return dest
 
 
+def _limit_video_duration(path: Path, folder: Path, max_seconds: int = 10) -> Path:
+    """Garante que qualquer vídeo de cena tenha no máximo o tempo configurado."""
+    limit = max(1, min(10, int(max_seconds or 10)))
+    try:
+        duration = float(media_duration(path) or 0)
+    except Exception:
+        duration = 0.0
+    if duration <= 0:
+        raise RuntimeError("Não foi possível detectar a duração do vídeo; o limite de dez segundos não pode ser verificado.")
+    if duration <= limit + 0.08:
+        return path
+
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg or not Path(ffmpeg).exists():
+        raise RuntimeError("FFmpeg é necessário para cortar vídeos acima do limite de 10 segundos.")
+    media_dir = folder / "media"
+    media_dir.mkdir(exist_ok=True)
+    key = hashlib.sha1(f"{path.resolve()}|{limit}".encode("utf-8")).hexdigest()[:16]
+    clipped = media_dir / f"clip_{key}_{limit}s.mp4"
+    if clipped.exists():
+        try:
+            if 0 < float(media_duration(clipped) or 0) <= limit + 0.15:
+                return clipped
+        except Exception:
+            pass
+        clipped.unlink(missing_ok=True)
+
+    command = [
+        str(ffmpeg), "-y", "-i", str(path), "-t", str(limit),
+        "-map", "0:v:0", "-an",
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(clipped),
+    ]
+    try:
+        subprocess.run(command, capture_output=True, text=True, timeout=240, check=True)
+        clipped_duration = float(media_duration(clipped) or 0)
+        if not clipped.exists() or clipped.stat().st_size < 1024 or not (0 < clipped_duration <= limit + 0.15):
+            raise RuntimeError("O FFmpeg não conseguiu validar o clipe cortado.")
+        return clipped
+    except Exception as exc:
+        clipped.unlink(missing_ok=True)
+        raise RuntimeError(f"Não foi possível limitar o vídeo a {limit} segundos: {str(exc)[:180]}")
+
+
 def ensure_media(pid: str, T: Tracker, p0: int | None = 2, p1: int | None = 22) -> dict[str, dict[str, Any]]:
     """Baixa (ou reaproveita) a mídia escolhida de cada cena. Se uma falhar, tenta as outras opções."""
     state = read_state(pid)
@@ -102,6 +175,8 @@ def ensure_media(pid: str, T: Tracker, p0: int | None = 2, p1: int | None = 22) 
     T.update(stage="download", status="running", detail=f"0 de {len(scenes)} cenas", progress=0, message="Baixando a mídia das cenas...",
              log=f"Baixando mídia de {len(scenes)} cenas (clipes já baixados são reaproveitados).")
 
+    max_video_seconds = max(1, min(10, int((state.get("settings") or {}).get("max_video_seconds", 10))))
+
     def work(idx: int, scene: dict[str, Any]):
         options = scene.get("options", [])
         selected = int(scene.get("selected", 0))
@@ -109,6 +184,8 @@ def ensure_media(pid: str, T: Tracker, p0: int | None = 2, p1: int | None = 22) 
         for attempt, i in enumerate(order[:3]):
             try:
                 path = _fetch_option(folder, options[i])
+                if options[i].get("media_type", "video") == "video":
+                    path = _limit_video_duration(path, folder, max_video_seconds)
                 info = probe_media(path)
                 if not info["has_video"]:
                     raise RuntimeError("arquivo sem imagem")
@@ -212,7 +289,6 @@ def cortar_silencios(audio_path: Path, limiar: str = "-50dB", pausa_maxima: floa
     Devolve (caminho_do_audio_cortado, nova_duracao_em_segundos).
     Se não houver silêncios para cortar ou houver erro, devolve o original.
     """
-    import tempfile
     dest_dir = work_dir or audio_path.parent
     dest_dir.mkdir(parents=True, exist_ok=True)
     out = dest_dir / f"narracao_cortada_{audio_path.stem}.m4a"
