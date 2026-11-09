@@ -82,7 +82,11 @@ def run_diagnostics() -> dict[str, Any]:
     )
 
     # FFmpeg e FFprobe são necessários para validar mídia e exportar vídeos.
-    configured_ffmpeg = str(ffmpeg_path() or "").strip()
+    try:
+        configured_ffmpeg = str(ffmpeg_path() or "").strip()
+    except Exception:
+        # ffmpeg_path() lança RuntimeError quando o executável não está instalado.
+        configured_ffmpeg = ""
     ffmpeg = configured_ffmpeg if configured_ffmpeg and Path(configured_ffmpeg).is_file() else (
         shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
     )
