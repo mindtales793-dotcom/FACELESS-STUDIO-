@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -444,8 +445,25 @@ class NarrationEngine:
                 "cached_blocks": state["cached_blocks"],
                 "pending_blocks": state["pending_blocks"]}
 
+    def _probe_audio_duration(self, audio_path: Path) -> float:
+        """Lê a duração do arquivo final, sem confiar na soma dos blocos."""
+        if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+            return 0.0
+        try:
+            probe = subprocess.run(
+                [ffprobe_path(), "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+                capture_output=True, text=True, timeout=45,
+            )
+            if probe.returncode != 0:
+                return 0.0
+            duration = float(probe.stdout.strip())
+            return duration if math.isfinite(duration) and duration > 0 else 0.0
+        except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+            return 0.0
+
     def get_job(self, job_id: str) -> dict[str, Any]:
-        """Retorna o estado público do job."""
+        """Retorna o estado público do job, recuperando a duração se ela estiver ausente."""
         state = self._read_job(job_id)
         public = {k: v for k, v in state.items()
                   if k not in ("chunks", "reference_id")}
@@ -462,6 +480,18 @@ class NarrationEngine:
                     status_code=500,
                     detail="A geração terminou, mas o arquivo de legendas não foi encontrado ou está vazio.",
                 )
+
+            try:
+                saved_duration = float(state.get("duration") or 0)
+            except (TypeError, ValueError):
+                saved_duration = 0.0
+            if not math.isfinite(saved_duration) or saved_duration <= 0:
+                measured_duration = self._probe_audio_duration(audio_path)
+                if measured_duration > 0:
+                    state["duration"] = round(measured_duration, 2)
+                    self._write_job(job_id, state)
+                    public["duration"] = state["duration"]
+
             public["audio_url"] = f"/api/narrations/{job_id}/audio"
             public["audio_download_url"] = f"/api/narrations/{job_id}/download"
             public["srt_url"] = f"/api/narrations/{job_id}/subtitles"
@@ -716,7 +746,7 @@ class NarrationEngine:
             self._write_job(job_id, state)
 
             output = folder / "narration.mp3"
-            self._merge_audio(files, durations, output, ffmpeg)
+            final_duration = self._merge_audio(files, durations, output, ffmpeg)
 
             # SRT
             srt_text = build_estimated_srt(chunks, durations)
@@ -733,7 +763,7 @@ class NarrationEngine:
                 "message": "Narração pronta. As legendas geradas têm tempos estimados.",
                 "audio_file": output.name,
                 "srt_file": "narration.srt",
-                "duration": round(sum(durations), 2),
+                "duration": round(final_duration, 2),
                 "updated_at": now_iso(),
             })
             state.pop("chunks", None)
@@ -782,7 +812,7 @@ class NarrationEngine:
         return audio_bytes, duration
 
     def _merge_audio(self, files: list[Path], durations: list[float],
-                     output: Path, ffmpeg: str) -> None:
+                     output: Path, ffmpeg: str) -> float:
         """Une todos os áudios com FFmpeg, adicionando pausas naturais."""
         # Cria arquivo de concat com pausas
         concat_lines: list[str] = []
@@ -833,7 +863,7 @@ class NarrationEngine:
             final_duration = float(validation.stdout.strip())
         except (TypeError, ValueError):
             final_duration = 0.0
-        if validation.returncode != 0 or final_duration <= 0:
+        if validation.returncode != 0 or not math.isfinite(final_duration) or final_duration <= 0:
             raise RuntimeError(
                 "O MP3 final foi criado, mas não passou na validação de reprodução: "
                 f"{(validation.stderr or validation.stdout)[-800:]}"
@@ -843,6 +873,8 @@ class NarrationEngine:
         concat_file.unlink(missing_ok=True)
         if pause_file and pause_file.exists():
             pause_file.unlink(missing_ok=True)
+
+        return final_duration
 
     # ------------------------------------------------------------------
     # Download
