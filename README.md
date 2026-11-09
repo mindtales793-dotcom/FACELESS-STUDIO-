@@ -53,6 +53,30 @@ Se o Chromium não iniciar, confirme que o navegador do Remotion foi instalado e
 3. O robô busca e pré-escolhe a mídia. Revise as cenas (trocar opção, buscar de novo, enviar arquivo seu, gerar com IA). Com **piloto automático** ele monta direto.
 4. Baixe o MP4 e, se quiser, o pacote do CapCut.
 
+## Fila de montagem e lote
+As montagens entram numa **fila global** e rodam uma por vez (`MAX_CONCURRENT_RENDERS`, padrão 1), para não travar o computador. Quem espera fica em "Montagem na fila" e pode ser cancelado. O piloto automático usa a mesma fila.
+- `POST /api/projects/render-batch` enfileira vários projetos de uma vez (sem corpo = todos os que estão prontos para montar; ou `{"ids": [...]}`) e devolve o que entrou e o que foi ignorado, com o motivo.
+- `GET /api/render-queue` mostra o que está montando e o que espera.
+- Se o servidor cair ou for reiniciado no meio de uma busca ou montagem, ao subir de novo o projeto volta a "pronto" com suas escolhas mantidas (antes ficava preso em "montando").
+
+## Google Flow e MCP: como funciona de verdade
+O Google Flow **não tem API pública**. Existem MCPs da comunidade que automatizam o site do Flow dentro de um Chrome logado; são frágeis e podem violar os termos do serviço, por isso não os embutimos.
+Aqui usamos os **mesmos modelos pela Gemini API** (`GEMINI_API_KEY`): Nano Banana (imagem) e Veo (vídeo, `FLOW_VIDEO_MODEL`). Consequências: o Veo é **cobrado por segundo** na sua chave, e os clipes **não aparecem no seu projeto do Flow**.
+
+`mcp_server.py` expõe como MCP: `flow_status`, `flow_generate_image`, `flow_generate_video`, `list_studio_projects`, `studio_project_status`. Exemplo (Claude Desktop / Claude Code):
+```json
+{"mcpServers": {"faceless-studio": {"command": "python", "args": ["/caminho/mcp_server.py"],
+  "env": {"GEMINI_API_KEY": "...", "DATA_DIR": "/caminho/data"}}}}
+```
+
+## Importar no CapCut
+Baixe o zip → extraia → feche o CapCut → rode `INSTALAR_NO_CAPCUT.bat` (precisa de Python no Windows) → abra o CapCut. O instalador faz backup do `root_meta_info.json`.
+**Limites:** feito para o CapCut desktop 8.x e **não foi testado no CapCut real** (o formato muda entre versões). Cor do template, vinheta, transições, ducking e os destaques na tela (cartões, etiquetas) ficam só no MP4. Se não abrir, use `legendas.srt` e a pasta Resources manualmente.
+
+## Licenças e limites
+Cada mídia mostra autor, origem e licença (há lista de créditos no projeto pronto). Confira antes de monetizar. Pixabay (cache 24 h), Unsplash (rastreio de download) e Coverr (crédito) têm regras próprias, já respeitadas. Fontes: Poppins, Anton, Bebas Neue, Archivo Black, DM Serif Display, Cinzel, EB Garamond (OFL, em `static/fonts`).
+Render em 1080p é pesado em servidores com pouca CPU; valide em 720p.
+
 ## Google Flow e MCP: como funciona de verdade
 O Google Flow **não tem API pública**. Existem MCPs da comunidade que automatizam o site do Flow dentro de um Chrome logado; são frágeis e podem violar os termos do serviço, por isso não os embutimos.
 Aqui usamos os **mesmos modelos pela Gemini API** (`GEMINI_API_KEY`): Nano Banana (imagem) e Veo (vídeo, `FLOW_VIDEO_MODEL`). Consequências: o Veo é **cobrado por segundo** na sua chave, e os clipes **não aparecem no seu projeto do Flow**.
