@@ -462,3 +462,21 @@ details.fold .fold-body{padding:18px}
   .log-line{grid-template-columns:54px 1fr}.log-line em{display:none}
   .scene-grid,.project-grid{grid-template-columns:1fr}
 }
+
+
+/* Biblioteca de Mídia Storyblocks */
+.storyblocks-search-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap}
+.storyblocks-search-form .field{min-width:130px}
+.storyblocks-search-form .field:first-child{flex:1;min-width:240px}
+.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(245px,1fr));gap:14px}
+.media-result-card{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:13px;background:rgba(14,22,40,.92);display:flex;flex-direction:column}
+.media-result-preview{position:relative;aspect-ratio:16/9;background:#050a14;overflow:hidden}
+.media-result-preview img,.media-result-preview video{width:100%;height:100%;object-fit:cover;display:block}
+.media-type-tag{position:absolute;top:9px;left:9px;padding:3px 7px;border-radius:5px;background:rgba(3,8,18,.82);color:#8fe9ee;font:10px var(--mono);letter-spacing:.06em}
+.media-result-body{padding:12px;display:grid;gap:8px}
+.media-result-body>strong{font-size:13px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.media-result-meta{font:11px var(--mono);color:var(--muted)}
+.media-result-actions{display:flex;gap:7px;flex-wrap:wrap}
+.chip.ok{color:var(--green);border-color:rgba(95,217,160,.35)}
+.chip.warn{color:var(--amber);border-color:rgba(242,180,92,.35)}
+@media(max-width:760px){.storyblocks-search-form{display:grid;grid-template-columns:1fr 1fr}.storyblocks-search-form .field:first-child{grid-column:1/-1}.storyblocks-search-form button{grid-column:1/-1}}
