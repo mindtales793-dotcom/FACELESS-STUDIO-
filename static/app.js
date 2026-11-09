@@ -1412,6 +1412,43 @@ async function loadKeysView() {
   } catch { /* sem servidor flow agent configurado */ }
 }
 
+async function runSystemDoctor() {
+  const button = $('#runSystemDoctorBtn');
+  const status = $('#doctorStatus');
+  const summary = $('#doctorSummary');
+  const host = $('#doctorResults');
+  if (!button || !host) return;
+  button.disabled = true;
+  button.innerHTML = '<span class="spin"></span> Verificando...';
+  if (status) { status.textContent = 'Executando'; status.className = 'chip'; }
+  if (host) host.innerHTML = '<div class="empty">Verificando componentes locais...</div>';
+  try {
+    const result = await api('/api/doctor');
+    const counts = result.counts || {};
+    if (status) {
+      status.textContent = result.ok ? 'Essencial pronto' : 'Atenção necessária';
+      status.className = result.ok ? 'chip ok' : 'chip warn';
+    }
+    if (summary) summary.textContent = result.summary || 'Verificação concluída.';
+    const labels = { ok: 'OK', warning: 'AVISO', error: 'ERRO' };
+    host.innerHTML = (result.checks || []).map(item => `
+      <div class="doctor-check status-${esc(item.status)}">
+        <div class="doctor-check-head"><b>${esc(item.label)}</b><span class="doctor-state">${labels[item.status] || 'INFO'}</span></div>
+        <p>${esc(item.detail)}</p>
+      </div>`).join('') || '<div class="empty">Nenhuma verificação foi retornada.</div>';
+  } catch (err) {
+    if (status) { status.textContent = 'Falha'; status.className = 'chip warn'; }
+    if (summary) summary.textContent = err.message || 'Não foi possível executar o diagnóstico.';
+    host.innerHTML = '<div class="form-error">Não foi possível consultar o diagnóstico.</div>';
+  } finally {
+    button.disabled = false;
+    button.innerHTML = ic('refresh') + ' Executar diagnóstico';
+  }
+}
+document.addEventListener('click', event => {
+  if (event.target.closest('#runSystemDoctorBtn')) runSystemDoctor();
+});
+
 function renderKeysGrid() {
   const grid = $('#keysCardsGrid');
   if (!grid || !S.keys) return;
