@@ -459,7 +459,7 @@ class NarrationEngine:
                 return 0.0
             duration = float(probe.stdout.strip())
             return duration if math.isfinite(duration) and duration > 0 else 0.0
-        except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+        except (OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError):
             return 0.0
 
     def get_job(self, job_id: str) -> dict[str, Any]:
