@@ -17,6 +17,7 @@ from scenes import parse_srt
 
 API = "https://generativelanguage.googleapis.com/v1beta"
 IMAGE_MODEL = os.getenv("FLOW_IMAGE_MODEL", "gemini-2.5-flash-image")
+TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
 
 
 def _gemini_key() -> str:
@@ -217,7 +218,7 @@ def gerar_consultas_para_cena(
         }
         try:
             resp = requests.post(
-                f"{API}/models/{IMAGE_MODEL}:generateContent",
+                f"{API}/models/{TEXT_MODEL}:generateContent",
                 headers=_headers(), json=corpo, timeout=(20, 60),
             )
             if resp.ok:
