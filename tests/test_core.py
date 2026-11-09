@@ -316,6 +316,7 @@ def test_normalize_settings_limita_percentual_e_duracao_de_clipes():
         "video_percent": 145,
         "max_video_seconds": 40,
         "openrouter_model": "google/gemini-2.5-flash",
+        "max_search_requests": 50,
     })
     assert cfg["video_percent"] == 100
     assert cfg["max_video_seconds"] == 10
