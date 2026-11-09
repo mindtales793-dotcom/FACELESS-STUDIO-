@@ -15,7 +15,7 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from store import PREVIEW_DIR, BASE_DIR, ffmpeg_path, run_ffmpeg
+from store import PREVIEW_DIR, BASE_DIR, ffmpeg_path
 
 FONTS_DIR = BASE_DIR / "static" / "fonts"
 
