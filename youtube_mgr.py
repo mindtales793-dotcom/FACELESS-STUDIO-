@@ -196,23 +196,38 @@ def youtube_search(query: str, per: int = 4, orientation: str = "landscape") -> 
     return results
 
 
-def download_youtube_video(url_or_id: str, dest: Path, max_duration: int = 600) -> Path:
-    """Baixa um vídeo do YouTube em MP4 e salva em dest."""
+def download_youtube_video(url_or_id: str, dest: Path, max_duration: int = 10) -> Path:
+    """Obtém um clipe autorizado e aplica limite rígido de até dez segundos."""
     import yt_dlp
 
+    max_duration = max(1, min(10, int(max_duration or 10)))
     vid = extract_video_id(url_or_id)
     url = f"https://www.youtube.com/watch?v={vid}" if vid else url_or_id.strip()
 
-    # Cache global de downloads do YouTube por hash da URL
     url_hash = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-    cached_file = YOUTUBE_CACHE_DIR / f"{url_hash}.mp4"
+    cached_file = YOUTUBE_CACHE_DIR / f"{url_hash}_{max_duration}s.mp4"
+
+    def duration_of(path: Path) -> float:
+        try:
+            import json as _json
+            result = subprocess.run(
+                [ffmpeg_path().replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe"),
+                 "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
+                capture_output=True, text=True, timeout=20, check=True,
+            )
+            return float((_json.loads(result.stdout).get("format") or {}).get("duration") or 0)
+        except Exception:
+            return 0.0
 
     if cached_file.exists() and cached_file.stat().st_size > 50_000:
-        shutil.copy2(cached_file, dest)
-        return dest
+        cached_duration = duration_of(cached_file)
+        if 0 < cached_duration <= max_duration + 0.15:
+            shutil.copy2(cached_file, dest)
+            return dest
+        cached_file.unlink(missing_ok=True)
 
     temp_tmpl = str(YOUTUBE_CACHE_DIR / f"tmp_{url_hash}_%(id)s.%(ext)s")
-
+    ffmpeg_bin = ffmpeg_path()
     ydl_opts = {
         "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": temp_tmpl,
@@ -222,46 +237,48 @@ def download_youtube_video(url_or_id: str, dest: Path, max_duration: int = 600) 
         "noplaylist": True,
         "socket_timeout": 30,
     }
-
-    ffmpeg_bin = ffmpeg_path()
     if ffmpeg_bin and Path(ffmpeg_bin).exists():
         ydl_opts["ffmpeg_location"] = str(Path(ffmpeg_bin).parent)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
-        # Se mesclou para mp4
         actual_file = Path(filename)
         if not actual_file.exists():
-            mp4_cand = actual_file.with_suffix(".mp4")
-            if mp4_cand.exists():
-                actual_file = mp4_cand
+            candidate = actual_file.with_suffix(".mp4")
+            if candidate.exists():
+                actual_file = candidate
 
         if not actual_file.exists() or actual_file.stat().st_size == 0:
-            raise RuntimeError(f"Não foi possível baixar o vídeo do YouTube: {url}")
+            raise RuntimeError(f"Não foi possível obter o clipe autorizado do YouTube: {url}")
 
-        # Corta o clipe para max 10 segundos usando FFmpeg (pega do início)
-        ffmpeg_bin = ffmpeg_path()
-        clip_path = YOUTUBE_CACHE_DIR / f"clip_{url_hash}.mp4"
-        if ffmpeg_bin and Path(ffmpeg_bin).exists():
+        duration = duration_of(actual_file)
+        if duration <= 0:
+            duration = float(info.get("duration") or 0)
+        if duration > max_duration + 0.15:
+            if not ffmpeg_bin or not Path(ffmpeg_bin).exists():
+                actual_file.unlink(missing_ok=True)
+                raise RuntimeError("FFmpeg é necessário para limitar este vídeo a até dez segundos.")
+            clip_path = YOUTUBE_CACHE_DIR / f"clip_{url_hash}_{max_duration}s.mp4"
             try:
                 subprocess.run(
-                    [ffmpeg_bin, "-y", "-i", str(actual_file),
-                     "-ss", "0", "-t", "10",
-                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                     "-an",  # sem áudio - clipe b-roll
-                     "-pix_fmt", "yuv420p",
-                     str(clip_path)],
-                    capture_output=True, timeout=120, check=True
+                    [ffmpeg_bin, "-y", "-i", str(actual_file), "-t", str(max_duration),
+                     "-map", "0:v:0", "-an", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+                     "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(clip_path)],
+                    capture_output=True, text=True, timeout=180, check=True,
                 )
-                actual_file.unlink(missing_ok=True)
+                clip_duration = duration_of(clip_path)
+                if not clip_path.exists() or clip_path.stat().st_size < 1024 or not (0 < clip_duration <= max_duration + 0.15):
+                    raise RuntimeError("O clipe final não passou na validação de duração.")
                 clip_path.replace(cached_file)
             except Exception:
-                # Se FFmpeg falhar, usa o arquivo completo
                 clip_path.unlink(missing_ok=True)
-                actual_file.replace(cached_file)
+                actual_file.unlink(missing_ok=True)
+                raise
+            actual_file.unlink(missing_ok=True)
         else:
             actual_file.replace(cached_file)
 
-        shutil.copy2(cached_file, dest)
-        return dest
+    shutil.copy2(cached_file, dest)
+    return dest
