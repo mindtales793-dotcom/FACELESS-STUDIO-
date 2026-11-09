@@ -435,9 +435,9 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
                 yt_query = make_youtube_query(q)
                 options.extend(youtube_mgr.youtube_search(yt_query, per=per, orientation=orientation))
             elif source == "storyblocks_video":
-                options.extend(storyblocks_mgr.storyblocks_search(q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "video", per, orientation))
+                options.extend(storyblocks_mgr.storyblocks_search(q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "video", per, orientation, project_id=project_id or "faceless-auto-project"))
             elif source == "storyblocks_image":
-                options.extend(storyblocks_mgr.storyblocks_search(q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "image", per, orientation))
+                options.extend(storyblocks_mgr.storyblocks_search(q, provider_key("STORYBLOCKS_API_KEY", "Storyblocks"), "image", per, orientation, project_id=project_id or "faceless-auto-project"))
             elif source == "pexels_video":
                 options.extend(pexels_search(q, provider_key("PEXELS_API_KEY", "Pexels"), "video", per, orientation))
             elif source == "pexels_image":
