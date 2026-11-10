@@ -110,12 +110,11 @@ const tplById = id => S.catalog.templates.find(t => t.id === id) || S.catalog.te
 const effStyle = cfg => deepMerge(tplById(cfg.template).style, cfg.style || {});
 function defaultCfg() {
   const src = S.catalog.sources;
-  const keyed = src.filter(s => s.needs_key && s.ready).map(s => s.id);
-  const sources = keyed.length ? keyed : src.filter(s => !s.needs_key && s.id !== 'youtube_frame').map(s => s.id);
+  const sources = src.filter(s => !s.id.startsWith('youtube_') && (!s.needs_key || s.ready)).map(s => s.id);
   const t = S.catalog.templates[0];
   return {
     ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', video_percent: 50, max_video_seconds: 10,
-    openrouter_model: 'google/gemini-2.5-flash', per_source: 3, max_search_requests: 12, pacing: t.pacing, search_lang: 'auto', query_extra: '',
+    openrouter_model: 'google/gemini-2.5-flash', openrouter_vision_model: 'google/gemini-2.5-flash', semantic_scene_grouping: true, stock_only: true, per_source: 3, max_search_requests: 12, pacing: t.pacing, search_lang: 'auto', query_extra: '',
     template: t.id, style: {}, autopilot: false, auto_capcut: false,
     audio: { music_id: null, music_volume: t.audio.music_volume, narration_volume: 1, ducking: true, duck_level: 'medium', fade_in: 2, fade_out: 3, loop: true, normalize: false },
   };
@@ -1971,7 +1970,7 @@ function sceneHtml(s, i, p) {
   const rejectedInfo = !opts.length && Number(s.rejected_media_count || 0) > 0 ? ` A IA conferiu as prévias e descartou ${Number(s.rejected_media_count)} resultado(s) que não correspondiam à fala.` : '';
   const searchUsageInfo = s.search_usage ? `<small class="hint">Consultas aos bancos: ${Number(s.search_usage.requests || 0)}/${Number(s.search_usage.limit || 0)}${s.search_usage.limit_reached ? ' · limite atingido' : ''}</small>` : '';
   const open = S.genOpen[s.id];
-  const genBox = open ? `<div class="gen-box"><div class="seg"><button type="button" class="${open.kind === 'image' ? 'on' : ''}" data-genkind="image">Imagem · Nano Banana</button><button type="button" class="${open.kind === 'video' ? 'on' : ''}" data-genkind="video">Vídeo · Veo</button></div><textarea data-genprompt placeholder="Descreva a cena…">${esc(open.prompt)}</textarea><div class="row">${open.kind === 'video' ? `<select data-gensec style="width:auto">${[4, 6, 8].map(n => `<option value="${n}" ${open.seconds === n ? 'selected' : ''}>${n} s</option>`).join('')}</select>` : ''}<button type="button" class="btn primary small" data-gen="go">${ic('spark')} Gerar</button><button type="button" class="btn ghost small" data-gen="close">Fechar</button></div><small class="hint">${open.kind === 'video' ? 'O Veo cobra por segundo na sua chave Gemini e leva alguns minutos.' : 'A imagem sai em alguns segundos e entra nas opções da cena.'}</small></div>` : '';
+  const genBox = open && !stockOnly ? `<div class="gen-box"><div class="seg"><button type="button" class="${open.kind === 'image' ? 'on' : ''}" data-genkind="image">Imagem · Nano Banana</button><button type="button" class="${open.kind === 'video' ? 'on' : ''}" data-genkind="video">Vídeo · Veo</button></div><textarea data-genprompt placeholder="Descreva a cena…">${esc(open.prompt)}</textarea><div class="row">${open.kind === 'video' ? `<select data-gensec style="width:auto">${[4, 6, 8].map(n => `<option value="${n}" ${open.seconds === n ? 'selected' : ''}>${n} s</option>`).join('')}</select>` : ''}<button type="button" class="btn primary small" data-gen="go">${ic('spark')} Gerar</button><button type="button" class="btn ghost small" data-gen="close">Fechar</button></div><small class="hint">${open.kind === 'video' ? 'O Veo cobra por segundo na sua chave Gemini e leva alguns minutos.' : 'A imagem sai em alguns segundos e entra nas opções da cena.'}</small></div>` : '';
   const genMsg = gen.status === 'running' ? `<div class="gen-msg"><span class="spin"></span>${esc(gen.message || 'Gerando…')}</div>` : gen.status === 'failed' ? `<div class="gen-msg fail">${ic('alert')} ${esc(gen.message || 'Falhou')}</div>` : '';
   const ytOpen = stockOnly ? null : S.ytOpen[s.id];
   const ytBox = ytOpen ? `
