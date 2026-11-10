@@ -198,6 +198,8 @@ def analyze_project(pid: str) -> None:
     try:
         state = read_state(pid)
         settings = state["settings"]
+        if settings.get("stock_only", True):
+            settings["sources"] = [source for source in settings.get("sources", []) if source not in ("youtube_video", "youtube_frame")]
         scenes = state["scenes"]
         # Reagrupa as legendas em cenas que correspondem a ações/assuntos completos.
         # Os tempos e textos originais do SRT são preservados; em falha, usa o fallback temporal.
@@ -372,6 +374,8 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
     try:
         state = read_state(pid)
         settings = state["settings"]
+        if settings.get("stock_only", True):
+            settings["sources"] = [source for source in settings.get("sources", []) if source not in ("youtube_video", "youtube_frame")]
         scenes = [s for s in state["scenes"] if s["id"] in empty_ids]
         if not settings["sources"]:
             raise RuntimeError("Selecione pelo menos uma fonte de mídia na aba Mídia.")
@@ -2703,6 +2707,8 @@ def research_scene(project_id: str, scene_id: str, body: SceneSearchBody):
     settings = state["settings"]
     query = (body.query or scene["query"]).strip()[:160]
     sources = [s for s in (body.sources or settings["sources"]) if s in providers.SOURCE_IDS]
+    if settings.get("stock_only", True):
+        sources = [source for source in sources if source not in ("youtube_video", "youtube_frame")]
     if not sources:
         raise HTTPException(status_code=400, detail="Selecione pelo menos uma fonte.")
     search_usage: dict[str, Any] = {}
