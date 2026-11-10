@@ -303,10 +303,7 @@ const PANES = {
       ${editing ? '<div class="note info" style="margin-top:14px">As fontes valem para <b>Buscar tudo de novo</b>. O ritmo das cenas só pode ser escolhido ao criar o projeto.</div>' : `
       <div class="field" style="margin-top:18px"><span>Ritmo das cenas</span><div class="choices">${Object.entries(c.pacing).map(([k, l]) => `<button type="button" class="choice ${cfg.pacing === k ? 'on' : ''}" data-set="pacing" data-val="${k}"><b>${l}</b><small>${pacingDesc[k] || ''}</small></button>`).join('')}</div></div>`}
     </div>
-    <div class="card" ${cfg.stock_only ? 'hidden' : ''}>
-      <div class="card-title"><div><h3>${ic('spark')} Gerar com IA (Google Flow)</h3><p>Para a cena que nenhum banco resolve, o robô gera uma imagem (Nano Banana) ou um clipe (Veo).</p></div>${c.flow.ready ? '<span class="pill ok">● Gemini API conectada</span>' : '<span class="pill key">falta GEMINI_API_KEY</span>'}</div>
-      <div class="note info">O Google Flow não tem API pública. Por isso o estúdio chama os mesmos modelos pela <b>Gemini API</b> (${esc(c.flow.video_model)} · ${esc(c.flow.image_model)}). Em cada cena, abra <b>Gerar com IA</b> na revisão. O Veo é cobrado na sua chave e o resultado não aparece no seu projeto do Flow.</div>
-    </div>`;
+
   },
 
   style(ctx) {
@@ -1119,7 +1116,7 @@ $('#projectList').addEventListener('click', async e => {
   const open = e.target.closest('[data-open]'); if (open) openProject(open.dataset.open);
 });
 
-const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo', 'media-library': 'viewMediaLibrary' };
+const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', groq: 'viewGroq', keys: 'viewKeys', 'skills-video': 'viewSkillsVideo', 'media-library': 'viewMediaLibrary' };
 function showView(name) {
   Object.keys(VIEW_ID).forEach(v => {
     const el = $('#' + VIEW_ID[v]);
@@ -1129,10 +1126,7 @@ function showView(name) {
   window.scrollTo(0, 0);
   if (name !== 'project') { stopPoll(); S.projectId = null; history.replaceState(null, '', location.pathname); }
   if (name === 'keys') loadKeysView();
-  if (name === 'flow') { loadFlowView(); startFlowPoll(); loadFlowAgentConfig().catch(() => {}); } else { stopFlowPoll(); }
-  if (name === 'flowblocks') loadFlowBlocksView();
   if (name === 'groq') loadGroqView();
-  if (name === 'skills') loadSkillsView();
   if (name === 'skills-video') loadSkillsVideoView();
   if (name === 'media-library') checkStoryblocksConnection();
 }
