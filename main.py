@@ -95,8 +95,9 @@ def normalize_settings(raw: dict[str, Any] | None, base: dict[str, Any] | None =
     out["quality"] = raw.get("quality", cur.get("quality", "720p"))
     if out["quality"] not in ("720p", "1080p"):
         out["quality"] = "720p"
-    sources = raw.get("sources", cur.get("sources", ["pexels_video"]))
-    out["sources"] = [s for s in sources if s in providers.SOURCE_IDS] if isinstance(sources, list) else ["pexels_video"]
+    default_sources = [s["id"] for s in providers.public_sources() if s["kind"] in ("video", "image") and s["ready"] and not s["id"].startswith("youtube_")]
+    sources = raw.get("sources", cur.get("sources", default_sources))
+    out["sources"] = [s for s in sources if s in providers.SOURCE_IDS] if isinstance(sources, list) else default_sources
     out["media_pref"] = raw.get("media_pref", cur.get("media_pref", "mixed"))
     if out["media_pref"] not in ("mixed", "video", "image"):
         out["media_pref"] = "mixed"
