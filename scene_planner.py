@@ -247,6 +247,7 @@ def gerar_consultas_para_cena(
         "motion_score": 50,
         "recommended_media": "video",
         "provider": "fallback",
+        "fallback_reason": openrouter_error,
     }
 
 
