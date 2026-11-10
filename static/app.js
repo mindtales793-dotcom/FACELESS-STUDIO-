@@ -268,6 +268,14 @@ const PANES = {
       <div class="card-title"><div><h3>De onde vêm as imagens e vídeos?</h3><p>Marque os bancos que o robô deve pesquisar. As fontes sem chave funcionam de imediato.</p></div>
         <div class="quick"><button type="button" class="btn ghost small" data-quick="video">Só vídeos</button><button type="button" class="btn ghost small" data-quick="image">Só fotos</button><button type="button" class="btn ghost small" data-quick="ready">Todas disponíveis</button><button type="button" class="btn ghost small" data-quick="none">Limpar</button></div></div>
       ${group('video', 'Vídeos', 'film')}${group('image', 'Fotos e imagens', 'image')}
+      <div class="card" style="margin-top:14px">
+        <div class="card-title"><div><h3>Bancos alternativos</h3><p>Pesquise em bibliotecas menos repetidas sem raspar sites nem contornar seus limites.</p></div></div>
+        <label class="field"><span>O que você está procurando?</span><input id="externalStockQuery" type="text" maxlength="120" placeholder="Ex.: vintage factory footage, old cars, city at night"></label>
+        <div class="quick" style="margin-top:10px;flex-wrap:wrap">
+          ${(c.external_sources || []).map(s => `<button type="button" class="btn ghost small" data-stock-search="${esc(s.id)}">${esc(s.name)} ↗</button>`).join('')}
+        </div>
+        <p class="hint" style="margin-top:10px">Esses botões abrem uma pesquisa externa limitada ao domínio de cada banco. A maioria não oferece API pública; por isso, o app não baixa nem copia arquivos automaticamente dessas páginas. Confira a licença antes de usar.</p>
+      </div>
       <p class="hint" style="margin-top:14px">Cada resultado mostra autor, origem e licença. Confira a licença antes de publicar ou monetizar. A opção YouTube · miniatura fica desmarcada por padrão e só deve ser usada quando você tiver autorização.</p>
       <p class="hint" style="margin-top:8px"><b>Busca inteligente:</b> o robô traduz o conceito da cena, gera variações de termos e ordena os resultados por relevância, qualidade e popularidade. As consultas ficam em cache por 24 h para economizar chamadas.</p>
     </div>
@@ -547,6 +555,14 @@ function bindContext(ctx) {
     const del = t.closest('[data-del-music]'); if (del) { e.stopPropagation(); return deleteMusic(del.dataset.delMusic); }
     const mu = t.closest('[data-music]');
     if (mu) { ctx.cfg.audio.music_id = mu.dataset.music || null; $$('[data-music]', c).forEach(r => r.classList.toggle('on', r === mu)); return; }
+    const stockSearch = t.closest('[data-stock-search]');
+    if (stockSearch) {
+      const query = c.querySelector('#externalStockQuery')?.value?.trim();
+      if (!query) { toast('Digite o que deseja encontrar.'); return; }
+      const source = (S.catalog.external_sources || []).find(s => s.id === stockSearch.dataset.stockSearch);
+      if (source) window.open(source.search_prefix + encodeURIComponent(query), '_blank', 'noopener,noreferrer');
+      return;
+    }
     const q = t.closest('[data-quick]');
     if (q) {
       const all = S.catalog.sources, k = q.dataset.quick;
