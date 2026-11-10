@@ -124,12 +124,35 @@ def _parse_json_plan(raw: str) -> dict[str, Any] | None:
         motion = 50
     media = str(value.get("recommended_media") or value.get("tipo_midia") or "video").lower()
     media = "image" if media in ("image", "imagem", "foto", "photo") else "video"
+    cue_plans = []
+    raw_cues = value.get("cue_plans") or value.get("blocos") or []
+    if isinstance(raw_cues, list):
+        for item in raw_cues[:20]:
+            if not isinstance(item, dict):
+                continue
+            cue_queries = item.get("consultas") or item.get("queries") or []
+            if isinstance(cue_queries, str):
+                cue_queries = [cue_queries]
+            cue_media = str(item.get("recommended_media") or item.get("tipo_midia") or media).lower()
+            cue_media = "image" if cue_media in ("image", "imagem", "foto", "photo") else "video"
+            try:
+                cue_motion = max(0, min(100, int(item.get("motion_score", motion))))
+            except (TypeError, ValueError):
+                cue_motion = motion
+            cue_plans.append({
+                "cue_id": str(item.get("cue_id") or item.get("id") or "")[:32],
+                "consultas": [" ".join(str(q).split())[:100] for q in cue_queries if str(q).strip()][:3],
+                "descricao_visual": str(item.get("descricao_visual") or item.get("visual_description") or "")[:300],
+                "recommended_media": cue_media,
+                "motion_score": cue_motion,
+            })
     return {
         "palavras_chave": [str(x)[:50] for x in keywords[:6]],
         "consultas": queries[:4],
         "descricao_visual": str(value.get("descricao_visual") or value.get("visual_description") or "")[:400],
         "motion_score": motion,
         "recommended_media": media,
+        "cue_plans": cue_plans,
     }
 
 
@@ -173,8 +196,12 @@ def gerar_consultas_para_cena(
     max_consultas: int = 4,
     contexto: str = "",
     model: str | None = None,
+    cue_texts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Gera consultas, descrição e nota de movimento. Prioriza OpenRouter; usa Gemini e texto como fallback."""
+    """Gera consultas para a cena e um plano visual independente para cada cue SRT.
+
+    A cena fornece contexto, mas cada cue mantém sua fala e timestamps originais.
+    """
     if idioma == "auto":
         idioma = _detect_lang(str(texto or "") + " " + str(contexto or ""))
 
@@ -199,8 +226,12 @@ def gerar_consultas_para_cena(
         "objetos, mapas, números, lugares estáticos e cenas simbólicas. Não escolha vídeo apenas para preencher. "
         f"{lang_instrucao}\n\n"
         f"CONTEXTO DO ROTEIRO: {contexto_curto or 'Não fornecido'}\n\n"
-        f"TRECHO ATUAL: {str(texto)[:1200]}\n\n"
-        'Formato: {"palavras_chave":["..."],"consultas":["...","..."],"descricao_visual":"...","motion_score":65,"recommended_media":"video"}'
+        f"TRECHO ATUAL DA CENA: {str(texto)[:1200]}\n\n"
+        "BLOCOS SRT INDIVIDUAIS (cada bloco precisa de sua própria interpretação e consultas; não misture as falas):\n"
+        f"{json.dumps([{'cue_id': str(c.get('id') or ''), 'inicio': c.get('start'), 'fim': c.get('end'), 'fala': str(c.get('text') or '')[:500]} for c in (cue_texts or [])[:20]], ensure_ascii=False)}\n\n"
+        "Inclua cue_plans como uma lista com um item para CADA cue recebido. Cada item deve conter cue_id, consultas (1 a 3 buscas específicas), descricao_visual, motion_score e recommended_media. "
+        "A consulta de cada cue deve corresponder àquela fala; use contexto global e vizinhos apenas para desambiguar. "
+        'Formato: {"palavras_chave":["..."],"consultas":["...","..."],"descricao_visual":"...","motion_score":65,"recommended_media":"video","cue_plans":[{"cue_id":"cue-0001","consultas":["..."],"descricao_visual":"...","motion_score":70,"recommended_media":"video"}]}'
     )
 
     # Primeiro tenta OpenRouter. Erros de rede, crédito ou modelo não interrompem o projeto.
@@ -246,6 +277,16 @@ def gerar_consultas_para_cena(
         "descricao_visual": str(texto)[:160],
         "motion_score": 50,
         "recommended_media": "video",
+        "cue_plans": [
+            {
+                "cue_id": str(cue.get("id") or ""),
+                "consultas": [str(cue.get("text") or "")[:80]],
+                "descricao_visual": str(cue.get("text") or "")[:180],
+                "recommended_media": "video",
+                "motion_score": 50,
+            }
+            for cue in (cue_texts or [])[:20]
+        ],
         "provider": "fallback",
         "fallback_reason": openrouter_error,
     }
