@@ -4,13 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import requests
 import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
-from store import DATA_DIR, ffmpeg_path
+from store import DATA_DIR, ffmpeg_path, media_duration
 
 try:
     import truststore
@@ -170,7 +171,9 @@ def youtube_search(query: str, per: int = 4, orientation: str = "landscape") -> 
                     "thumbnail": thumb,
                     "source_url": f"https://www.youtube.com/watch?v={vid}",
                     "photographer": channel[:80],
-                    "license": "YouTube · direitos de reutilização não verificados",
+                    "license": "YouTube · direitos não verificados; requer autorização antes de importar",
+                    "preview_only": True,
+                    "requires_permission": True,
                     "width": 1280 if orientation != "portrait" else 720,
                     "height": 720 if orientation != "portrait" else 1280,
                     "duration": round(duration, 1) if duration else None,
@@ -194,6 +197,230 @@ def youtube_search(query: str, per: int = 4, orientation: str = "landscape") -> 
         except OSError:
             pass
     return results
+
+
+
+
+def _youtube_video_duration(url: str) -> float:
+    """Lê somente os metadados públicos do vídeo; não baixa o arquivo."""
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    try:
+        return float(info.get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _seconds(value: Any) -> float:
+    """Converte segundos ou HH:MM:SS para segundos."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("timestamp ausente")
+    if ":" not in raw:
+        return float(raw)
+    parts = [float(part) for part in raw.split(":")]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    raise ValueError("timestamp inválido")
+
+
+def locate_youtube_moment(
+    url_or_id: str,
+    narration_text: str,
+    model: str | None = None,
+    max_seconds: int = 10,
+    context: str = "",
+) -> dict[str, Any]:
+    """Localiza com OpenRouter o melhor intervalo do vídeo para a fala exata do SRT."""
+    key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("Configure OPENROUTER_API_KEY para localizar o momento no vídeo.")
+    video_id = extract_video_id(url_or_id)
+    if not video_id:
+        raise ValueError("Link do YouTube inválido.")
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    limit = max(1, min(10, int(max_seconds or 10)))
+    narration = " ".join(str(narration_text or "").split())[:1600]
+    if not narration:
+        raise ValueError("A cena não possui texto do SRT para comparar.")
+
+    source_duration = _youtube_video_duration(url)
+    if source_duration <= 0:
+        raise RuntimeError("Não foi possível confirmar a duração do vídeo.")
+    selected_model = (model or os.getenv("OPENROUTER_VISION_MODEL") or "google/gemini-2.5-flash").strip()
+    prompt = (
+        "Você é um editor de vídeo documental. Analise a linha do tempo do vídeo e encontre "
+        "UM único trecho contínuo que melhor represente visualmente a fala atual. Priorize a ação "
+        "e o significado exato, não apenas palavras parecidas. Escolha quando a ação está visível; "
+        "evite introduções, créditos, tela preta e partes sem relação. Use os segundos contados "
+        "desde o início do vídeo. Não invente timestamps: navegue na linha do tempo e use o tempo "
+        "real observado. O intervalo deve ter entre 1 segundo e " + str(limit) + " segundos. "
+        "Se nenhuma cena mostrar algo relacionado, retorne match=false. Responda somente JSON com "
+        "match (boolean), start_seconds (número), end_seconds (número), confidence (0 a 1), "
+        "reason (frase em português) e visual_summary (frase)."
+        "\n\nFALA EXATA DO SRT:\n" + narration +
+        "\n\nCONTEXTO VIZINHO (somente para desambiguar):\n" +
+        (" ".join(str(context or "").split())[:1800] or "Não fornecido") +
+        "\n\nDURAÇÃO TOTAL DO VÍDEO: " + f"{source_duration:.2f}" + " segundos."
+    )
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:3000",
+            "X-OpenRouter-Title": "FACELESS STUDIO",
+        },
+        json={
+            "model": selected_model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "video_url", "video_url": {"url": url, "processing": "agentic"}},
+                ],
+            }],
+            "temperature": 0.1,
+            "max_tokens": 500,
+        },
+        timeout=(25, 240),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    message = (((payload.get("choices") or [{}])[0].get("message")) or {})
+    raw = message.get("content") or ""
+    if isinstance(raw, list):
+        raw = " ".join(
+            str(part.get("text") or "") for part in raw
+            if isinstance(part, dict) and part.get("type") in (None, "text")
+        )
+    raw = str(raw).strip()
+    first, last = raw.find("{"), raw.rfind("}")
+    if first < 0 or last <= first:
+        raise RuntimeError("O OpenRouter não devolveu um intervalo de cena em JSON válido.")
+    try:
+        result = json.loads(raw[first:last + 1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("A resposta de localização não é um JSON válido.") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("A resposta do OpenRouter não contém um objeto de cena.")
+    if result.get("match") is not True:
+        raise RuntimeError(str(result.get("reason") or "Não foi encontrada uma cena compatível.")[:220])
+    try:
+        start = _seconds(result.get("start_seconds"))
+        end = _seconds(result.get("end_seconds"))
+        confidence = max(0.0, min(1.0, float(result.get("confidence") or 0)))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("O OpenRouter retornou timestamps inválidos.") from exc
+    if start < 0 or start >= source_duration or end <= start:
+        raise RuntimeError("O intervalo encontrado está fora da duração real do vídeo.")
+    end = min(end, start + limit, source_duration)
+    if end - start < 0.8:
+        raise RuntimeError("O trecho encontrado é curto demais para montar uma cena.")
+    return {
+        "video_id": video_id,
+        "url": url,
+        "video_duration": source_duration,
+        "start_seconds": round(start, 3),
+        "end_seconds": round(end, 3),
+        "duration": round(end - start, 3),
+        "confidence": round(confidence, 3),
+        "reason": str(result.get("reason") or "")[:240],
+        "visual_summary": str(result.get("visual_summary") or "")[:240],
+        "model": selected_model,
+    }
+
+
+def download_youtube_clip(
+    url_or_id: str,
+    dest: Path,
+    start_seconds: float,
+    clip_seconds: float,
+    max_duration: int = 10,
+) -> Path:
+    """Baixa o intervalo selecionado (não o início do vídeo) e valida o teto de 10 s."""
+    import yt_dlp
+
+    limit = max(1, min(10, int(max_duration or 10)))
+    start = max(0.0, float(start_seconds or 0))
+    length = min(float(clip_seconds or 0), float(limit))
+    video_id = extract_video_id(url_or_id)
+    if not video_id:
+        raise ValueError("Link do YouTube inválido.")
+    if length < 0.8:
+        raise ValueError("O trecho precisa ter pelo menos 0,8 segundo.")
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg or not Path(ffmpeg).exists():
+        raise RuntimeError("FFmpeg é necessário para recortar o trecho do YouTube.")
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    cache_id = hashlib.sha1(f"{video_id}|{start:.3f}|{length:.3f}|{limit}".encode("utf-8")).hexdigest()[:18]
+    cached = YOUTUBE_CACHE_DIR / f"scene_{cache_id}.mp4"
+    if cached.exists() and 0 < float(media_duration(cached) or 0) <= limit + 0.15:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cached, dest)
+        return dest
+
+    prefix = f"section_{cache_id}_{int(time.time() * 1000)}"
+    output_template = str(YOUTUBE_CACHE_DIR / (prefix + ".%(ext)s"))
+
+    def selected_range(_info: dict[str, Any], _ydl: Any) -> list[dict[str, Any]]:
+        return [{"start_time": start, "end_time": start + length, "title": "scene", "index": 1}]
+
+    ydl_opts = {
+        "format": "best[ext=mp4]/best",
+        "outtmpl": output_template,
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "socket_timeout": 35,
+        "download_ranges": selected_range,
+        "force_keyframes_at_cuts": True,
+        "ffmpeg_location": str(Path(ffmpeg).parent),
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            prepared = Path(ydl.prepare_filename(info))
+            candidates = [
+                item for item in YOUTUBE_CACHE_DIR.glob(prefix + "*")
+                if item.is_file() and item.stat().st_size > 0
+                and not item.name.endswith((".part", ".ytdl", ".json"))
+            ]
+            if prepared.exists() and prepared.is_file():
+                candidates.insert(0, prepared)
+            source_file = next((item for item in candidates if item.is_file() and item.stat().st_size > 0), None)
+        if source_file is None:
+            raise RuntimeError("O YouTube não entregou o trecho solicitado.")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            str(ffmpeg), "-y", "-i", str(source_file),
+            "-map", "0:v:0", "-an", "-t", f"{length:.3f}",
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dest),
+        ]
+        subprocess.run(command, capture_output=True, text=True, timeout=240, check=True)
+        actual_duration = float(media_duration(dest) or 0)
+        if not dest.exists() or dest.stat().st_size < 1024 or not (0.1 < actual_duration <= limit + 0.15):
+            raise RuntimeError("O trecho final não passou na validação de duração de até dez segundos.")
+        shutil.copy2(dest, cached)
+        return dest
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+    finally:
+        for item in YOUTUBE_CACHE_DIR.glob(prefix + "*"):
+            if item.is_file():
+                item.unlink(missing_ok=True)
 
 
 def download_youtube_video(url_or_id: str, dest: Path, max_duration: int = 10) -> Path:
