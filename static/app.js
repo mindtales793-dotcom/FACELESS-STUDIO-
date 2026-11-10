@@ -269,7 +269,7 @@ const PANES = {
       ${group('video', 'Vídeos', 'film')}${group('image', 'Fotos e imagens', 'image')}
       <div class="grid2" style="margin-top:14px">
         <div>${toggle(ctx, 'stock_only', 'Desativar geração de mídia por IA', 'Mantém imagens e vídeos reais. YouTube continua como fonte opcional; a importação exige autorização e recorte sincronizado com o SRT.')}</div>
-        <div>${toggle(ctx, 'semantic_scene_grouping', 'Agrupar SRT por significado', 'OpenRouter agrupa legendas consecutivas em cenas coerentes, sem alterar horários ou falas.')}</div>
+        <div class="note info">Cada bloco do SRT é uma unidade visual independente. A mídia escolhida começa no timestamp do bloco e acompanha a sequência da narração.</div>
       </div>
       <div class="card" style="margin-top:14px">
         <div class="card-title"><div><h3>Bancos alternativos</h3><p>Pesquise em bibliotecas menos repetidas sem raspar sites nem contornar seus limites.</p></div></div>
