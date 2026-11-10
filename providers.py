@@ -26,6 +26,7 @@ SOURCES: list[dict[str, Any]] = [
     {"id": "pixabay_video", "provider": "Pixabay", "kind": "video", "env": "PIXABAY_API_KEY", "blurb": "Vídeos livres, resultados em cache por 24 h", "link": "https://pixabay.com/api/docs/"},
     {"id": "coverr_video", "provider": "Coverr", "kind": "video", "env": "COVERR_API_KEY", "blurb": "Vídeos stock reais, exige crédito ao autor", "link": "https://coverr.co/developers"},
     {"id": "wikimedia_video", "provider": "Wikimedia Commons", "kind": "video", "env": None, "blurb": "Arquivos históricos e documentais, licenças variadas", "link": "https://commons.wikimedia.org/"},
+    {"id": "prelinger_video", "provider": "Prelinger Archives", "kind": "video", "env": None, "blurb": "Filmes históricos do Internet Archive; só retorna itens com licença reutilizável verificada", "link": "https://archive.org/details/prelinger"},
     {"id": "pexels_image", "provider": "Pexels", "kind": "image", "env": "PEXELS_API_KEY", "blurb": "Fotos de alta resolução", "link": "https://www.pexels.com/api/"},
     {"id": "pixabay_image", "provider": "Pixabay", "kind": "image", "env": "PIXABAY_API_KEY", "blurb": "Fotos e ilustrações livres", "link": "https://pixabay.com/api/docs/"},
     {"id": "unsplash_image", "provider": "Unsplash", "kind": "image", "env": "UNSPLASH_ACCESS_KEY", "blurb": "Fotos artísticas, exige atribuição", "link": "https://unsplash.com/developers"},
@@ -33,6 +34,22 @@ SOURCES: list[dict[str, Any]] = [
     {"id": "wikimedia_image", "provider": "Wikimedia Commons", "kind": "image", "env": None, "blurb": "Fotos históricas e de domínio público", "link": "https://commons.wikimedia.org/"},
 ]
 SOURCE_IDS = {s["id"] for s in SOURCES}
+
+# Fontes sem API pública confirmada: o app abre uma pesquisa no domínio oficial
+# em vez de raspar páginas ou contornar mecanismos de download.
+EXTERNAL_STOCK_SOURCES: list[dict[str, str]] = [
+    {"id": "videezy_external", "name": "Videezy", "kind": "video", "site": "videezy.com", "search_prefix": "https://www.google.com/search?q=site%3Avideezy.com%2Ffree-video%20", "link": "https://www.videezy.com/", "license": "Arquivos gratuitos exigem atribuição; verificar a licença de cada item."},
+    {"id": "vecteezy_external", "name": "Vecteezy", "kind": "mixed", "site": "vecteezy.com", "search_prefix": "https://www.google.com/search?q=site%3Avecteezy.com%20", "link": "https://www.vecteezy.com/", "license": "API oficial disponível; plano gratuito informado de até 500 downloads/mês. Licença gratuita exige atribuição."},
+    {"id": "dareful_external", "name": "Dareful", "kind": "video", "site": "dareful.com", "search_prefix": "https://www.google.com/search?q=site%3Adareful.com%20", "link": "https://dareful.com/", "license": "CC BY 4.0; atribuição obrigatória."},
+    {"id": "lifeofvids_external", "name": "Life of Vids", "kind": "video", "site": "lifeofvids.com", "search_prefix": "https://www.google.com/search?q=site%3Alifeofvids.com%20", "link": "https://www.lifeofvids.com/", "license": "Verificar as condições de cada coleção e arquivo."},
+    {"id": "stocksnap_external", "name": "StockSnap", "kind": "image", "site": "stocksnap.io", "search_prefix": "https://www.google.com/search?q=site%3Astocksnap.io%20", "link": "https://stocksnap.io/", "license": "CC0 conforme os termos do site; não possui API pública atualmente."},
+    {"id": "isorepublic_external", "name": "ISO Republic", "kind": "mixed", "site": "isorepublic.com", "search_prefix": "https://www.google.com/search?q=site%3Aisorepublic.com%20", "link": "https://isorepublic.com/", "license": "Verificar a licença e as restrições de cada arquivo."},
+    {"id": "kaboompics_external", "name": "Kaboompics", "kind": "image", "site": "kaboompics.com", "search_prefix": "https://www.google.com/search?q=site%3Akaboompics.com%20", "link": "https://kaboompics.com/", "license": "Uso comercial permitido na Standard License; arquivos Editorial Use Only são não comerciais."},
+    {"id": "burst_external", "name": "Burst by Shopify", "kind": "image", "site": "shopify.com/stock-photos", "search_prefix": "https://www.google.com/search?q=site%3Ashopify.com%2Fstock-photos%20", "link": "https://www.shopify.com/stock-photos", "license": "Licença varia entre CC0 e Licensed Photo; não redistribuir como arquivo stock isolado."},
+]
+
+def public_external_sources() -> list[dict[str, str]]:
+    return [dict(source) for source in EXTERNAL_STOCK_SOURCES]
 
 
 def public_sources() -> list[dict[str, Any]]:
@@ -340,6 +357,86 @@ def openverse_search(query: str, per: int) -> list[dict[str, Any]]:
     return options
 
 
+def prelinger_search(query: str, per: int) -> list[dict[str, Any]]:
+    """Busca filmes do Prelinger no Internet Archive e só aceita licenças reutilizáveis verificáveis."""
+    cache_key = f"prelinger|{per}|{query.lower().strip()}"
+    cached = _cache_read(cache_key)
+    if cached is not None:
+        return cached
+    search_q = f'collection:prelinger AND mediatype:movies AND ({query})'
+    response = requests.get(
+        "https://archive.org/advancedsearch.php",
+        params={"q": search_q, "fl[]": ["identifier", "title"], "rows": per, "page": 1, "output": "json"},
+        headers={"User-Agent": "FacelessStudio/1.0 (media search; contact via project repository)"},
+        timeout=35,
+    )
+    response.raise_for_status()
+    docs = response.json().get("response", {}).get("docs", [])
+    options: list[dict[str, Any]] = []
+    allowed_markers = ("creativecommons.org/licenses/by/", "creativecommons.org/licenses/by-sa/",
+                       "creativecommons.org/publicdomain/zero/", "creativecommons.org/publicdomain/mark/")
+    for doc in docs[:per]:
+        identifier = str(doc.get("identifier") or "").strip()
+        if not identifier:
+            continue
+        try:
+            meta_response = requests.get(
+                f"https://archive.org/metadata/{identifier}",
+                headers={"User-Agent": "FacelessStudio/1.0 (media search)"},
+                timeout=25,
+            )
+            meta_response.raise_for_status()
+            metadata_payload = meta_response.json()
+        except Exception:
+            continue
+        metadata = metadata_payload.get("metadata") or {}
+        license_url = str(metadata.get("licenseurl") or "").strip()
+        rights = str(metadata.get("rights") or "").strip()
+        license_lower = license_url.lower()
+        rights_lower = rights.lower()
+        # Sem licença explícita não entra na busca automática. NC e ND são excluídas
+        # porque o app pode cortar, redimensionar e combinar o clipe em obras monetizadas.
+        if "by-nc" in license_lower or "by-nd" in license_lower:
+            continue
+        if not (any(marker in license_lower for marker in allowed_markers)
+                or "public domain" in rights_lower or "domínio público" in rights_lower):
+            continue
+        files = metadata_payload.get("files") or []
+        candidates = [
+            f for f in files
+            if str(f.get("name") or "").lower().endswith(".mp4")
+            and "thumb" not in str(f.get("name") or "").lower()
+            and f.get("name")
+        ]
+        if not candidates:
+            continue
+        # Prioriza arquivos com dimensões conhecidas e evita escolher um arquivo excessivamente grande.
+        candidates.sort(key=lambda f: (
+            0 if int(f.get("height") or 0) in range(480, 1441) else 1,
+            abs(int(f.get("height") or 720) - 720),
+            int(f.get("size") or 0) if str(f.get("size") or "").isdigit() else 0,
+        ))
+        chosen = candidates[0]
+        filename = str(chosen["name"])
+        from urllib.parse import quote
+        download_url = f"https://archive.org/download/{identifier}/{quote(filename)}"
+        options.append(_asset_option(
+            provider="Prelinger Archives", media_type="video", asset_id=identifier,
+            download_url=download_url, thumbnail=f"https://archive.org/services/img/{identifier}",
+            source_url=f"https://archive.org/details/{identifier}",
+            creator=str(metadata.get("creator") or "Prelinger Archives"),
+            license_name=license_url or rights or "Public domain",
+            width=int(chosen.get("width") or 0) or None,
+            height=int(chosen.get("height") or 0) or None,
+            duration=float(metadata.get("length")) if str(metadata.get("length") or "").replace(".", "", 1).isdigit() else None,
+            title=str(metadata.get("title") or doc.get("title") or identifier)[:140],
+            description=str(metadata.get("description") or "")[:240],
+        ))
+    if options:
+        _cache_write(cache_key, options)
+    return options
+
+
 _WIKIMEDIA_THROTTLED: set[str] = set()  # project ids where wikimedia was rate-limited
 
 
@@ -503,6 +600,8 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
                 source_counts[source] = source_counts.get(source, 0) + 1
             elif source == "openverse_image":
                 options.extend(openverse_search(q, per))
+            elif source == "prelinger_video":
+                options.extend(prelinger_search(q, per))
             elif source == "wikimedia_image":
                 options.extend(wikimedia_search(q, "image", per, project_id=project_id))
             elif source == "wikimedia_video":
