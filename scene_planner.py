@@ -127,7 +127,7 @@ def _parse_json_plan(raw: str) -> dict[str, Any] | None:
     cue_plans = []
     raw_cues = value.get("cue_plans") or value.get("blocos") or []
     if isinstance(raw_cues, list):
-        for item in raw_cues[:20]:
+        for item in raw_cues[:40]:
             if not isinstance(item, dict):
                 continue
             cue_queries = item.get("consultas") or item.get("queries") or []
@@ -178,7 +178,7 @@ def _openrouter_plan(prompt: str, model: str | None = None) -> dict[str, Any] | 
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.25,
-            "max_tokens": 500,
+            "max_tokens": 3500,
         },
         timeout=(15, 45),
     )
@@ -228,7 +228,7 @@ def gerar_consultas_para_cena(
         f"CONTEXTO DO ROTEIRO: {contexto_curto or 'Não fornecido'}\n\n"
         f"TRECHO ATUAL DA CENA: {str(texto)[:1200]}\n\n"
         "BLOCOS SRT INDIVIDUAIS (cada bloco precisa de sua própria interpretação e consultas; não misture as falas):\n"
-        f"{json.dumps([{'cue_id': str(c.get('id') or ''), 'inicio': c.get('start'), 'fim': c.get('end'), 'fala': str(c.get('text') or '')[:500]} for c in (cue_texts or [])[:20]], ensure_ascii=False)}\n\n"
+        f"{json.dumps([{'cue_id': str(c.get('id') or ''), 'inicio': c.get('start'), 'fim': c.get('end'), 'fala': str(c.get('text') or '')[:500]} for c in (cue_texts or [])[:40]], ensure_ascii=False)}\n\n"
         "Inclua cue_plans como uma lista com um item para CADA cue recebido. Cada item deve conter cue_id, consultas (1 a 3 buscas específicas), descricao_visual, motion_score e recommended_media. "
         "A consulta de cada cue deve corresponder àquela fala; use contexto global e vizinhos apenas para desambiguar. "
         'Formato: {"palavras_chave":["..."],"consultas":["...","..."],"descricao_visual":"...","motion_score":65,"recommended_media":"video","cue_plans":[{"cue_id":"cue-0001","consultas":["..."],"descricao_visual":"...","motion_score":70,"recommended_media":"video"}]}'
@@ -285,7 +285,7 @@ def gerar_consultas_para_cena(
                 "recommended_media": "video",
                 "motion_score": 50,
             }
-            for cue in (cue_texts or [])[:20]
+            for cue in (cue_texts or [])[:40]
         ],
         "provider": "fallback",
         "fallback_reason": openrouter_error,
