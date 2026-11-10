@@ -1,7 +1,6 @@
 """Testes dos bancos alternativos de mídia."""
 from __future__ import annotations
 
-import providers
 
 
 class FakeResponse:
@@ -16,6 +15,7 @@ class FakeResponse:
 
 
 def test_prelinger_exige_licenca_reutilizavel_e_exclui_nc(monkeypatch):
+    import providers
     monkeypatch.setattr(providers, "_cache_read", lambda _key: None)
     monkeypatch.setattr(providers, "_cache_write", lambda *_args: None)
     payloads = [
@@ -54,6 +54,7 @@ def test_prelinger_exige_licenca_reutilizavel_e_exclui_nc(monkeypatch):
 
 
 def test_catalogo_de_fontes_externas_tem_busca_e_licenca():
+    import providers
     sources = providers.public_external_sources()
     ids = {source["id"] for source in sources}
     assert {"videezy_external", "vecteezy_external", "dareful_external",
