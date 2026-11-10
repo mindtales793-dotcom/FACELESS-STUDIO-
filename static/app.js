@@ -302,7 +302,7 @@ const PANES = {
       </div>
       ${editing ? '<div class="note info" style="margin-top:14px">As fontes valem para <b>Buscar tudo de novo</b>. O ritmo das cenas só pode ser escolhido ao criar o projeto.</div>' : `
       <div class="field" style="margin-top:18px"><span>Ritmo das cenas</span><div class="choices">${Object.entries(c.pacing).map(([k, l]) => `<button type="button" class="choice ${cfg.pacing === k ? 'on' : ''}" data-set="pacing" data-val="${k}"><b>${l}</b><small>${pacingDesc[k] || ''}</small></button>`).join('')}</div></div>`}
-    </div>
+    </div>`;
 
   },
 
