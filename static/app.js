@@ -68,7 +68,7 @@ const SAVED_VOICES = [
 
 /* ---------- estado */
 const S = {
-  catalog: null, health: null, music: [], files: { narration: null, srt: null, script: null }, title: '',
+  catalog: null, health: null, healthStatus: 'checking', healthError: '', catalogStatus: 'loading', music: [], files: { narration: null, srt: null, script: null }, title: '',
   cfg: null, projects: [], projectId: null, project: null, logSeq: 0, scenesRev: -1, poll: null, tick: 0,
   skills: { selected: null },
   skillsVideoSelected: null,
@@ -1587,8 +1587,7 @@ async function saveKeyDict(keysToSave) {
     const res = await jpost('/api/keys', { keys: keysToSave });
     S.keys = res.keys || [];
     renderKeysGrid();
-    S.health = await api('/api/health');
-    renderHealth();
+    await refreshHealth();
     toast('Chaves salvas com sucesso!');
   } catch (err) {
     toast(err.message);
@@ -2389,13 +2388,67 @@ $('#saveEditor').onclick = async () => {
 };
 
 /* ---------- navegação, saúde e login */
+async function refreshHealth() {
+  S.healthStatus = 'checking';
+  S.healthError = '';
+  renderHealth();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const health = await api('/api/health', { signal: controller.signal });
+    if (!health || health.ok === false) {
+      throw new Error('O servidor respondeu, mas informou que não está saudável.');
+    }
+    S.health = health;
+    S.healthStatus = 'online';
+    return health;
+  } catch (err) {
+    S.health = null;
+    S.healthStatus = 'offline';
+    S.healthError = err?.name === 'AbortError'
+      ? 'Tempo limite ao consultar o servidor (12 segundos).'
+      : (err?.message || 'Não foi possível consultar o servidor.');
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    renderHealth();
+  }
+}
+
 function renderHealth() {
-  const h = S.health, src = S.catalog.sources, ready = src.filter(s => s.ready).length;
+  const host = $('#healthList');
+  if (!host) return;
   const li = (cls, text) => `<li><span class="dot ${cls}"></span>${text}</li>`;
-  $('#healthList').innerHTML = [
-    li('ok', 'Servidor conectado'), li(h.ffmpeg_available ? 'ok' : 'bad', h.ffmpeg_available ? 'FFmpeg ativo' : 'FFmpeg ausente'),
+
+  if (S.healthStatus === 'checking') {
+    host.innerHTML = li('', 'Verificando…');
+    return;
+  }
+  if (S.healthStatus !== 'online' || !S.health) {
+    host.innerHTML = [
+      li('bad', 'Servidor indisponível'),
+      li('warn', esc(S.healthError || 'Não foi possível consultar a API do servidor.')),
+    ].join('');
+    return;
+  }
+
+  const h = S.health;
+  const src = Array.isArray(S.catalog?.sources) ? S.catalog.sources : [];
+  const ready = src.filter(s => s.ready).length;
+  const catalogLabel = S.catalog
+    ? `${ready} de ${src.length} bancos prontos`
+    : (S.catalogStatus === 'error' ? 'Catálogo de mídia indisponível' : 'Carregando bancos de mídia…');
+  const catalogClass = S.catalog
+    ? (ready >= 3 ? 'ok' : 'warn')
+    : (S.catalogStatus === 'error' ? 'warn' : '');
+
+  host.innerHTML = [
+    li('ok', 'Servidor conectado'),
+    li(h.ffmpeg_available ? 'ok' : 'bad', h.ffmpeg_available ? 'FFmpeg ativo' : 'FFmpeg ausente'),
     li(h.subtitles_available ? 'ok' : 'warn', h.subtitles_available ? 'Legendas queimadas' : 'Sem libass (legendas)'),
-    li(ready >= 3 ? 'ok' : 'warn', `${ready} de ${src.length} bancos prontos`), li(h.fish_audio ? 'ok' : '', h.fish_audio ? 'Fish Audio ligado' : 'Fish Audio sem chave'),
+    li(catalogClass, catalogLabel),
+    li(h.fish_audio ? 'ok' : '', h.fish_audio ? 'Fish Audio ligado' : 'Fish Audio sem chave'),
     li(h.flow_ai ? 'ok' : '', h.flow_ai ? 'IA do Google Flow ligada' : 'IA do Google Flow sem chave'),
     li(h.groq ? 'ok' : '', h.groq ? 'Groq (Whisper) ligado' : 'Groq sem chave'),
   ].join('');
@@ -3161,8 +3214,39 @@ $('#viewGroq')?.addEventListener('input', e => {
 });
 
 async function init() {
+  S.healthStatus = 'checking';
+  S.healthError = '';
+  S.catalogStatus = 'loading';
+  S.catalog = null;
+  renderHealth();
+
+  // A saúde do servidor é independente do catálogo: uma falha no catálogo
+  // não pode deixar o indicador preso em "Verificando…".
+  const [, catalogResult] = await Promise.allSettled([
+    refreshHealth(),
+    api('/api/catalog').then(catalog => {
+      S.catalog = catalog;
+      S.catalogStatus = 'loaded';
+      renderHealth();
+      return catalog;
+    }).catch(err => {
+      S.catalog = null;
+      S.catalogStatus = 'error';
+      renderHealth();
+      throw err;
+    }),
+  ]);
+
+  if (catalogResult.status === 'rejected') {
+    const err = catalogResult.reason;
+    if (!String(err?.message || err).includes('login')) {
+      const prefix = S.healthStatus === 'online' ? 'Servidor conectado, mas' : 'Não foi possível iniciar o catálogo:';
+      toast(`${prefix} ${err?.message || 'falha ao carregar os bancos de mídia.'}`);
+    }
+    return;
+  }
+
   try {
-    [S.health, S.catalog] = await Promise.all([api('/api/health'), api('/api/catalog')]);
     await loadMusic();
     if (!CREATE) {
       CREATE = { cfg: defaultCfg(), container: $('#createPane'), tabsEl: $('#createTabs'), tab: 'files', projectId: null };
@@ -3171,6 +3255,8 @@ async function init() {
     }
     hydrateIcons(); renderHealth(); renderPane(CREATE); updateSummary(); updateCreateBar(); await loadProjects();
     const m = location.hash.match(/#p=([a-f0-9]{32})/); if (m) openProject(m[1]);
-  } catch (err) { if (!String(err.message).includes('login')) toast(err.message); }
+  } catch (err) {
+    if (!String(err?.message || err).includes('login')) toast(err?.message || String(err));
+  }
 }
 init();
