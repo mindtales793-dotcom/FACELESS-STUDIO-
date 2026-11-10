@@ -194,7 +194,7 @@ def test_scene_preserva_cada_cue_original_com_timestamps():
     scene = _scene(cues[:2], 1, "pt", "")
     assert len(scene["source_cues"]) == 2
     assert scene["source_cues"][0] == {
-        "id": "cue-0001", "start": 0.0, "end": 2.0,
+        "id": "cue-000001", "start": 0.0, "end": 2.0,
         "text": "Ele trabalhou durante anos na fábrica.",
     }
     assert scene["source_cues"][1]["start"] == 2.0
@@ -206,13 +206,46 @@ def test_parser_preserva_planos_visuais_individuais_por_cue():
     parsed = scene_planner._parse_json_plan(json.dumps({
         "consultas": ["São Paulo 1970 aerial footage"],
         "cue_plans": [{
-            "cue_id": "cue-0001",
+            "cue_id": "cue-000001",
             "consultas": ["São Paulo 1970 street archive"],
             "descricao_visual": "Ruas de São Paulo na década de 1970",
             "recommended_media": "video",
             "motion_score": 88,
         }],
     }, ensure_ascii=False))
-    assert parsed["cue_plans"][0]["cue_id"] == "cue-0001"
+    assert parsed["cue_plans"][0]["cue_id"] == "cue-000001"
     assert parsed["cue_plans"][0]["consultas"] == ["São Paulo 1970 street archive"]
     assert parsed["cue_plans"][0]["motion_score"] == 88
+
+
+
+def test_prompt_visual_recebe_cada_cue_com_id_e_timestamps(monkeypatch):
+    import scene_planner
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    captured = {}
+
+    def fake_post(_url, **kwargs):
+        captured["payload"] = kwargs["json"]
+        return FakeResponse({"choices": [{"message": {"content": json.dumps({
+            "consultas": ["São Paulo 1970 archival footage"],
+            "cue_plans": [
+                {"cue_id": "cue-000001", "consultas": ["São Paulo 1970 city streets"]},
+                {"cue_id": "cue-000002", "consultas": ["Brazilian workers arriving city 1970"]},
+            ],
+        }, ensure_ascii=False)}}]})
+
+    monkeypatch.setattr(scene_planner.requests, "post", fake_post)
+    result = scene_planner.gerar_consultas_para_cena(
+        "São Paulo crescia e recebia novos moradores.",
+        idioma="pt",
+        contexto="Documentário sobre São Paulo em 1970.",
+        cue_texts=[
+            {"id": "cue-000001", "start": 0.0, "end": 2.0, "text": "São Paulo, 1970."},
+            {"id": "cue-000002", "start": 2.0, "end": 4.0, "text": "Milhares chegavam em busca de oportunidades."},
+        ],
+    )
+    prompt = captured["payload"]["messages"][1]["content"]
+    assert "cue-000001" in prompt and "cue-000002" in prompt
+    assert "São Paulo, 1970." in prompt
+    assert "Milhares chegavam em busca de oportunidades." in prompt
+    assert len(result["cue_plans"]) == 2
