@@ -9,7 +9,7 @@
   "scripts": {
     "start": "python -m uvicorn main:app --host 127.0.0.1 --port 3000",
     "narration:server": "node server-narration.js",
-    "test": "node --check server-narration.js && node --check src/narration/narration-engine.js && node --check src/narration/narration-router.js && node --check remotion/render.js"
+    "test": "node --check static/app.js && node --check server-narration.js && node --check src/narration/narration-engine.js && node --check src/narration/narration-router.js && node --check remotion/render.js"
   },
   "keywords": [],
   "author": "",

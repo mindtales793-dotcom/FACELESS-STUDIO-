@@ -68,7 +68,7 @@ const SAVED_VOICES = [
 
 /* ---------- estado */
 const S = {
-  catalog: null, health: null, music: [], files: { narration: null, srt: null, script: null }, title: '',
+  catalog: null, health: null, healthStatus: 'checking', healthError: '', catalogStatus: 'loading', music: [], files: { narration: null, srt: null, script: null }, title: '',
   cfg: null, projects: [], projectId: null, project: null, logSeq: 0, scenesRev: -1, poll: null, tick: 0,
   skills: { selected: null },
   skillsVideoSelected: null,
@@ -302,7 +302,7 @@ const PANES = {
       </div>
       ${editing ? '<div class="note info" style="margin-top:14px">As fontes valem para <b>Buscar tudo de novo</b>. O ritmo das cenas só pode ser escolhido ao criar o projeto.</div>' : `
       <div class="field" style="margin-top:18px"><span>Ritmo das cenas</span><div class="choices">${Object.entries(c.pacing).map(([k, l]) => `<button type="button" class="choice ${cfg.pacing === k ? 'on' : ''}" data-set="pacing" data-val="${k}"><b>${l}</b><small>${pacingDesc[k] || ''}</small></button>`).join('')}</div></div>`}
-    </div>
+    </div>`;
 
   },
 
@@ -1587,8 +1587,7 @@ async function saveKeyDict(keysToSave) {
     const res = await jpost('/api/keys', { keys: keysToSave });
     S.keys = res.keys || [];
     renderKeysGrid();
-    S.health = await api('/api/health');
-    renderHealth();
+    await refreshHealth();
     toast('Chaves salvas com sucesso!');
   } catch (err) {
     toast(err.message);
@@ -1959,8 +1958,8 @@ function sceneHtml(s, i, p) {
   const gen = s.gen || {}, flowOk = !stockOnly && S.catalog.flow.ready;
   const img = o && o.thumbnail ? `<img loading="lazy" referrerpolicy="no-referrer" alt="" src="${esc(o.thumbnail)}" onerror="this.style.display='none'">` : ic('image');
   const strip = opts.map((x, k) => x.preview_only && String(x.provider || '').startsWith('YouTube')
-    ? \`<button type="button" class="opt" data-match-youtube data-yturl="\${esc(x.download_url || x.source_url || '')}" title="Analisar vídeo e localizar o trecho que combina com esta fala"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="\${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>ANALISAR</i></button>\`
-    : \`<button type="button" class="opt \${k === sel ? 'on' : ''}" data-pick="\${k}" title="\${esc(\`\${x.provider} · \${x.photographer || ''}\${x.media_match_score != null ? ' · IA ' + x.media_match_score + '%' : ''}\`)}"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="\${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>\${x.media_type === 'video' ? '▶' : 'FOTO'}</i></button>\`).join('');
+    ? `<button type="button" class="opt" data-match-youtube data-yturl="${esc(x.download_url || x.source_url || '')}" title="Analisar vídeo e localizar o trecho que combina com esta fala"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>ANALISAR</i></button>`
+    : `<button type="button" class="opt ${k === sel ? 'on' : ''}" data-pick="${k}" title="${esc(`${x.provider} · ${x.photographer || ''}${x.media_match_score != null ? ' · IA ' + x.media_match_score + '%' : ''}`)}"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>${x.media_type === 'video' ? '▶' : 'FOTO'}</i></button>`).join('');
   const line = o ? `<div class="src-line"><span>${esc(o.provider)}</span>${o.photographer ? `<span>· ${esc(o.photographer)}</span>` : ''}${o.license ? `<span>· ${esc(o.license)}</span>` : ''}${o.source_url ? `<a href="${esc(o.source_url)}" target="_blank" rel="noopener">origem ${ic('link')}</a>` : ''}</div>` : '';
   const matchInfo = o && o.media_match_score != null ? `<small class="hint"><b>Compatibilidade visual da IA: ${Math.round(Number(o.media_match_score))}%</b>${o.media_match_reason ? ` · ${esc(o.media_match_reason)}` : ''}</small>` : '';
   const verificationInfo = o && !o.relevance_verified && s.media_verification?.status === 'unavailable' ? `<small class="hint">Prévia ainda não validada pela IA: ${esc(s.media_verification.message || 'verifique se a imagem corresponde à fala antes de montar.')}</small>` : '';
@@ -2389,13 +2388,67 @@ $('#saveEditor').onclick = async () => {
 };
 
 /* ---------- navegação, saúde e login */
+async function refreshHealth() {
+  S.healthStatus = 'checking';
+  S.healthError = '';
+  renderHealth();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const health = await api('/api/health', { signal: controller.signal });
+    if (!health || health.ok === false) {
+      throw new Error('O servidor respondeu, mas informou que não está saudável.');
+    }
+    S.health = health;
+    S.healthStatus = 'online';
+    return health;
+  } catch (err) {
+    S.health = null;
+    S.healthStatus = 'offline';
+    S.healthError = err?.name === 'AbortError'
+      ? 'Tempo limite ao consultar o servidor (12 segundos).'
+      : (err?.message || 'Não foi possível consultar o servidor.');
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    renderHealth();
+  }
+}
+
 function renderHealth() {
-  const h = S.health, src = S.catalog.sources, ready = src.filter(s => s.ready).length;
+  const host = $('#healthList');
+  if (!host) return;
   const li = (cls, text) => `<li><span class="dot ${cls}"></span>${text}</li>`;
-  $('#healthList').innerHTML = [
-    li('ok', 'Servidor conectado'), li(h.ffmpeg_available ? 'ok' : 'bad', h.ffmpeg_available ? 'FFmpeg ativo' : 'FFmpeg ausente'),
+
+  if (S.healthStatus === 'checking') {
+    host.innerHTML = li('', 'Verificando…');
+    return;
+  }
+  if (S.healthStatus !== 'online' || !S.health) {
+    host.innerHTML = [
+      li('bad', 'Servidor indisponível'),
+      li('warn', esc(S.healthError || 'Não foi possível consultar a API do servidor.')),
+    ].join('');
+    return;
+  }
+
+  const h = S.health;
+  const src = Array.isArray(S.catalog?.sources) ? S.catalog.sources : [];
+  const ready = src.filter(s => s.ready).length;
+  const catalogLabel = S.catalog
+    ? `${ready} de ${src.length} bancos prontos`
+    : (S.catalogStatus === 'error' ? 'Catálogo de mídia indisponível' : 'Carregando bancos de mídia…');
+  const catalogClass = S.catalog
+    ? (ready >= 3 ? 'ok' : 'warn')
+    : (S.catalogStatus === 'error' ? 'warn' : '');
+
+  host.innerHTML = [
+    li('ok', 'Servidor conectado'),
+    li(h.ffmpeg_available ? 'ok' : 'bad', h.ffmpeg_available ? 'FFmpeg ativo' : 'FFmpeg ausente'),
     li(h.subtitles_available ? 'ok' : 'warn', h.subtitles_available ? 'Legendas queimadas' : 'Sem libass (legendas)'),
-    li(ready >= 3 ? 'ok' : 'warn', `${ready} de ${src.length} bancos prontos`), li(h.fish_audio ? 'ok' : '', h.fish_audio ? 'Fish Audio ligado' : 'Fish Audio sem chave'),
+    li(catalogClass, catalogLabel),
+    li(h.fish_audio ? 'ok' : '', h.fish_audio ? 'Fish Audio ligado' : 'Fish Audio sem chave'),
     li(h.flow_ai ? 'ok' : '', h.flow_ai ? 'IA do Google Flow ligada' : 'IA do Google Flow sem chave'),
     li(h.groq ? 'ok' : '', h.groq ? 'Groq (Whisper) ligado' : 'Groq sem chave'),
   ].join('');
@@ -3161,8 +3214,39 @@ $('#viewGroq')?.addEventListener('input', e => {
 });
 
 async function init() {
+  S.healthStatus = 'checking';
+  S.healthError = '';
+  S.catalogStatus = 'loading';
+  S.catalog = null;
+  renderHealth();
+
+  // A saúde do servidor é independente do catálogo: uma falha no catálogo
+  // não pode deixar o indicador preso em "Verificando…".
+  const [, catalogResult] = await Promise.allSettled([
+    refreshHealth(),
+    api('/api/catalog').then(catalog => {
+      S.catalog = catalog;
+      S.catalogStatus = 'loaded';
+      renderHealth();
+      return catalog;
+    }).catch(err => {
+      S.catalog = null;
+      S.catalogStatus = 'error';
+      renderHealth();
+      throw err;
+    }),
+  ]);
+
+  if (catalogResult.status === 'rejected') {
+    const err = catalogResult.reason;
+    if (!String(err?.message || err).includes('login')) {
+      const prefix = S.healthStatus === 'online' ? 'Servidor conectado, mas' : 'Não foi possível iniciar o catálogo:';
+      toast(`${prefix} ${err?.message || 'falha ao carregar os bancos de mídia.'}`);
+    }
+    return;
+  }
+
   try {
-    [S.health, S.catalog] = await Promise.all([api('/api/health'), api('/api/catalog')]);
     await loadMusic();
     if (!CREATE) {
       CREATE = { cfg: defaultCfg(), container: $('#createPane'), tabsEl: $('#createTabs'), tab: 'files', projectId: null };
@@ -3171,6 +3255,8 @@ async function init() {
     }
     hydrateIcons(); renderHealth(); renderPane(CREATE); updateSummary(); updateCreateBar(); await loadProjects();
     const m = location.hash.match(/#p=([a-f0-9]{32})/); if (m) openProject(m[1]);
-  } catch (err) { if (!String(err.message).includes('login')) toast(err.message); }
+  } catch (err) {
+    if (!String(err?.message || err).includes('login')) toast(err?.message || String(err));
+  }
 }
 init();
