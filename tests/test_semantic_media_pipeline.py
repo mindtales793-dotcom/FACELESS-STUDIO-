@@ -291,3 +291,20 @@ def test_cada_cue_srt_vira_uma_cena_com_tempo_exato():
         assert scene["end"] == cue["end"]
         assert scene["text"] == cue["text"]
         assert scene["source_cues"] == [cue]
+
+
+
+def test_render_usa_fim_do_cue_e_segura_quadro_no_intervalo_vazio():
+    from render import _scene_frame_windows
+    scenes = [
+        {"start": 0.0, "end": 2.0},
+        {"start": 2.5, "end": 5.0},
+    ]
+    windows = _scene_frame_windows(scenes, audio_len=5.0, fps=10)
+    assert scenes[0]["render_start"] == 0.0
+    assert scenes[0]["render_end"] == 2.0
+    assert scenes[0]["render_slot_end"] == 2.5
+    assert windows[0]["active_frames"] == 20
+    assert windows[0]["total_frames"] == 25
+    assert scenes[1]["render_start"] == 2.5
+    assert scenes[1]["render_end"] == 5.0
