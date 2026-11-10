@@ -612,19 +612,31 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
             if message not in messages:
                 messages.append(message)
 
+    # Primeira rodada: garante ao menos uma consulta de banco para cada bloco
+    # visual antes de gastar o orçamento repetindo fontes para o primeiro cue.
+    # A fonte é alternada para distribuir as consultas entre os provedores.
+    used_sources_by_query: dict[str, set[str]] = {}
     for q_index, q in enumerate(query_list):
-        if not queries_used or queries_used[-1] != q:
+        if requests_made >= max_requests or not source_list:
+            break
+        if q not in queries_used:
             queries_used.append(q)
+        source = source_list[q_index % len(source_list)]
+        run_source(source, q)
+        used_sources_by_query.setdefault(q, set()).add(source)
+
+    # Segunda rodada: amplia a variedade de fontes para cada cue enquanto houver
+    # orçamento. A primeira rodada já tentou cobrir todos os cues disponíveis.
+    for q in query_list:
+        if requests_made >= max_requests:
+            break
         for source in source_list:
             if requests_made >= max_requests:
                 break
+            if source in used_sources_by_query.get(q, set()):
+                continue
             run_source(source, q)
-        deduped_now = {(o.get("provider"), o.get("id"), o.get("media_type")) for o in options}
-        # Já há material suficiente? Não gasta chamadas extras nas demais consultas.
-        if q_index == 0 and len(deduped_now) >= max(6, per * 2):
-            break
-        if requests_made >= max_requests:
-            break
+            used_sources_by_query.setdefault(q, set()).add(source)
 
     planned_requests = len(query_list) * len(source_list)
     if usage is not None:
