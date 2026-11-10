@@ -383,11 +383,17 @@ def auto_pick(scenes: list[dict[str, Any]], pref: str, ratio: str, video_percent
         options = scene.get("options") or []
         if not options:
             continue
+        usable = [(i, option) for i, option in enumerate(options) if not option.get("preview_only")]
+        if not usable:
+            # Candidatos do YouTube precisam passar pela extração autorizada antes do render.
+            scene["selected"] = -1
+            scene["media_target_fallback"] = True
+            continue
         dur = max(0.5, float(scene["end"]) - float(scene["start"]))
         target = scene.get("target_media_type")
-        preferred = [(i, option) for i, option in enumerate(options) if option.get("media_type") == target]
+        preferred = [(i, option) for i, option in usable if option.get("media_type") == target]
         # Não deixa uma cena sem mídia se a cota escolhida não existe nos bancos marcados.
-        candidates = preferred or list(enumerate(options))
+        candidates = preferred or usable
         scene["media_target_fallback"] = not bool(preferred)
         best_i, best_score = candidates[0][0], -1e9
         for i, option in candidates:
