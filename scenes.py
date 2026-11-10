@@ -261,6 +261,14 @@ def _scene(cues: list[dict[str, Any]], number: int, lang: str, extra: str) -> di
         "id": f"scene-{number:03d}", "start": cues[0]["start"], "end": cues[-1]["end"],
         "text": text[:1200], "query": query,
         "search_queries": query_variants(text, lang, extra, 3),
+        # Preserva cada cue original para que a pesquisa visual possa interpretar
+        # cada bloco SRT separadamente, sem perder texto nem timestamps.
+        "source_cues": [
+            {"id": f"cue-{index + 1:04d}", "start": float(cue["start"]),
+             "end": float(cue["end"]), "text": str(cue["text"])}
+            for index, cue in enumerate(cues)
+        ],
+        "cue_visual_plans": [],
         "search_notes": [],
         "options": [], "selected": 0, "status": "pending",
     }
