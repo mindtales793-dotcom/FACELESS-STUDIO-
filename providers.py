@@ -564,6 +564,7 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
                             "duration": None,
                             "license": "Quadro extraído do YouTube · reutilize somente com autorização",
                             "requires_permission": True,
+                            "preview_only": True,
                             "frame_from_video": True,
                         })
             elif source == "storyblocks_video":
