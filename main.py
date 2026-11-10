@@ -272,7 +272,8 @@ def analyze_project(pid: str) -> None:
                     scene["visual_description"] = plan.get("descricao_visual", "")
                     scene["query_ai_provider"] = plan.get("provider", "fallback")
                     if scene["query_ai_provider"] == "fallback":
-                        T.log(f"OpenRouter não gerou uma busca específica para a cena {scene_index + 1}; usando termos locais.", "warn", stage="search")
+                        reason = str(plan.get("fallback_reason") or "sem detalhe")[:140]
+                        T.log(f"OpenRouter indisponível na cena {scene_index + 1}: {reason}. Usando termos locais.", "warn", stage="search")
                 except Exception as exc:
                     T.log(f"IA visual: fallback para busca tradicional nesta cena ({str(exc)[:100]}).", "warn", stage="search")
 
