@@ -92,7 +92,65 @@ def test_sem_openrouter_usa_agrupamento_temporal(monkeypatch):
     assert len(scenes) >= 1
 
 
-def test_stock_only_remove_youtube_e_separa_modelo_de_visao(monkeypatch):
+
+
+def test_openrouter_localiza_trecho_do_youtube_e_aplica_limite_da_cena(monkeypatch):
+    import youtube_mgr
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(youtube_mgr, "_youtube_video_duration", lambda _url: 120.0)
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["payload"] = kwargs["json"]
+        return FakeResponse({"choices": [{"message": {"content": json.dumps({
+            "match": True,
+            "start_seconds": 45.5,
+            "end_seconds": 58.0,
+            "confidence": 0.91,
+            "reason": "A pessoa aparece dirigindo no trânsito.",
+            "visual_summary": "Carro em movimento numa avenida.",
+        }, ensure_ascii=False)}}]})
+
+    monkeypatch.setattr(youtube_mgr.requests, "post", fake_post)
+    result = youtube_mgr.locate_youtube_moment(
+        "https://www.youtube.com/watch?v=abcdefghijk",
+        "Ele finalmente dirige o carro que comprou.",
+        model="google/gemini-2.5-flash",
+        max_seconds=8,
+    )
+    video_part = captured["payload"]["messages"][0]["content"][1]
+    assert captured["url"].endswith("/chat/completions")
+    assert video_part["type"] == "video_url"
+    assert video_part["video_url"]["processing"] == "agentic"
+    assert result["start_seconds"] == 45.5
+    assert result["end_seconds"] == 53.5
+    assert result["duration"] == 8.0
+    assert result["confidence"] == 0.91
+
+
+def test_openrouter_locator_rejeita_video_sem_cena_compativel(monkeypatch):
+    import pytest
+    import youtube_mgr
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(youtube_mgr, "_youtube_video_duration", lambda _url: 80.0)
+
+    def fake_post(_url, **_kwargs):
+        return FakeResponse({"choices": [{"message": {"content": json.dumps({
+            "match": False,
+            "reason": "O vídeo não mostra a ação narrada.",
+        }, ensure_ascii=False)}}]})
+
+    monkeypatch.setattr(youtube_mgr.requests, "post", fake_post)
+    with pytest.raises(RuntimeError, match="não mostra a ação"):
+        youtube_mgr.locate_youtube_moment(
+            "https://youtu.be/abcdefghijk",
+            "A fala descreve uma fábrica.",
+            max_seconds=10,
+        )
+
+
+def test_stock_only_mantem_youtube_como_fonte_real_e_separa_modelo_de_visao(monkeypatch):
     import main
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     cfg = main.normalize_settings({
@@ -101,8 +159,7 @@ def test_stock_only_remove_youtube_e_separa_modelo_de_visao(monkeypatch):
         "openrouter_model": "google/gemini-2.5-flash",
         "openrouter_vision_model": "google/gemini-2.5-flash",
     })
-    assert "youtube_video" not in cfg["sources"]
-    assert "youtube_frame" not in cfg["sources"]
+    assert "youtube_video" in cfg["sources"]
     assert "wikimedia_video" in cfg["sources"]
     assert "openverse_image" in cfg["sources"]
     assert cfg["stock_only"] is True
