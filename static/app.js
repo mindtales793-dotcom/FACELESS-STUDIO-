@@ -110,12 +110,11 @@ const tplById = id => S.catalog.templates.find(t => t.id === id) || S.catalog.te
 const effStyle = cfg => deepMerge(tplById(cfg.template).style, cfg.style || {});
 function defaultCfg() {
   const src = S.catalog.sources;
-  const keyed = src.filter(s => s.needs_key && s.ready).map(s => s.id);
-  const sources = keyed.length ? keyed : src.filter(s => !s.needs_key && s.id !== 'youtube_frame').map(s => s.id);
+  const sources = src.filter(s => s.id !== 'youtube_frame' && (!s.needs_key || s.ready)).map(s => s.id);
   const t = S.catalog.templates[0];
   return {
     ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', video_percent: 50, max_video_seconds: 10,
-    openrouter_model: 'google/gemini-2.5-flash', per_source: 3, max_search_requests: 12, pacing: t.pacing, search_lang: 'auto', query_extra: '',
+    openrouter_model: 'google/gemini-2.5-flash', openrouter_vision_model: 'google/gemini-2.5-flash', semantic_scene_grouping: true, stock_only: true, per_source: 3, max_search_requests: 12, pacing: t.pacing, search_lang: 'auto', query_extra: '',
     template: t.id, style: {}, autopilot: false, auto_capcut: false,
     audio: { music_id: null, music_volume: t.audio.music_volume, narration_volume: 1, ducking: true, duck_level: 'medium', fade_in: 2, fade_out: 3, loop: true, normalize: false },
   };
@@ -251,7 +250,7 @@ const PANES = {
   media(ctx) {
     const c = S.catalog, cfg = ctx.cfg, editing = !!ctx.projectId;
     const group = (kind, title, icon) => {
-      const list = c.sources.filter(s => s.kind === kind);
+      const list = c.sources.filter(s => s.kind === kind && s.id !== 'youtube_frame');
       return `<div class="src-group"><div class="src-head">${ic(icon)}<h4>${title}</h4></div><div class="src-grid">${list.map(s => {
         const on = cfg.sources.includes(s.id);
         const pill = s.id === 'youtube_frame'
@@ -268,7 +267,19 @@ const PANES = {
       <div class="card-title"><div><h3>De onde vêm as imagens e vídeos?</h3><p>Marque os bancos que o robô deve pesquisar. As fontes sem chave funcionam de imediato.</p></div>
         <div class="quick"><button type="button" class="btn ghost small" data-quick="video">Só vídeos</button><button type="button" class="btn ghost small" data-quick="image">Só fotos</button><button type="button" class="btn ghost small" data-quick="ready">Todas disponíveis</button><button type="button" class="btn ghost small" data-quick="none">Limpar</button></div></div>
       ${group('video', 'Vídeos', 'film')}${group('image', 'Fotos e imagens', 'image')}
-      <p class="hint" style="margin-top:14px">Cada resultado mostra autor, origem e licença. Confira a licença antes de publicar ou monetizar. A opção YouTube · miniatura fica desmarcada por padrão e só deve ser usada quando você tiver autorização.</p>
+      <div class="grid2" style="margin-top:14px">
+        <div>${toggle(ctx, 'stock_only', 'Desativar geração de mídia por IA', 'Mantém imagens e vídeos reais. YouTube continua como fonte opcional; a importação exige autorização e recorte sincronizado com o SRT.')}</div>
+        <div class="note info">Cada bloco do SRT é uma unidade visual independente. A mídia escolhida começa no timestamp do bloco e acompanha a sequência da narração.</div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="card-title"><div><h3>Bancos alternativos</h3><p>Pesquise em bibliotecas menos repetidas sem raspar sites nem contornar seus limites.</p></div></div>
+        <label class="field"><span>O que você está procurando?</span><input id="externalStockQuery" type="text" maxlength="120" placeholder="Ex.: vintage factory footage, old cars, city at night"></label>
+        <div class="quick" style="margin-top:10px;flex-wrap:wrap">
+          ${(c.external_sources || []).map(s => `<button type="button" class="btn ghost small" data-stock-search="${esc(s.id)}">${esc(s.name)} ↗</button>`).join('')}
+        </div>
+        <p class="hint" style="margin-top:10px">Esses botões abrem uma pesquisa externa limitada ao domínio de cada banco. A maioria não oferece API pública; por isso, o app não baixa nem copia arquivos automaticamente dessas páginas. Confira a licença antes de usar.</p>
+      </div>
+      <p class="hint" style="margin-top:14px">YouTube também funciona como banco de candidatos. O OpenRouter localiza o momento que combina com a fala do SRT, recorta até ${cfg.max_video_seconds || 10} s e salva o vídeo e um quadro do mesmo trecho. A importação exige confirmação de licença/autorização; o app não verifica direitos automaticamente.</p>
       <p class="hint" style="margin-top:8px"><b>Busca inteligente:</b> o robô traduz o conceito da cena, gera variações de termos e ordena os resultados por relevância, qualidade e popularidade. As consultas ficam em cache por 24 h para economizar chamadas.</p>
     </div>
     <div class="card">
@@ -286,15 +297,13 @@ const PANES = {
         <span>Modelo OpenRouter para interpretar o roteiro</span>
         <div class="row"><input id="openrouterModelInput" list="openrouterModelList" type="text" data-bind="openrouter_model" maxlength="120" value="${esc(cfg.openrouter_model || 'google/gemini-2.5-flash')}" placeholder="Ex.: google/gemini-2.5-flash" style="flex:1"><button type="button" class="btn ghost small" id="loadOpenRouterModelsBtn">Carregar modelos</button></div>
         <datalist id="openrouterModelList"></datalist>
-        <small>A chave OPENROUTER_API_KEY é cadastrada em Chaves de API. O OpenRouter é prioritário; se falhar, o estúdio tenta Gemini e depois a busca tradicional.</small>
+        <small>A chave OPENROUTER_API_KEY é cadastrada em Chaves de API. O modelo interpreta a fala e cria buscas específicas; se falhar, o app registra um aviso e usa fallback.</small>
+        <label class="field" style="margin-top:12px"><span>Modelo OpenRouter para conferir imagens (visão)</span><input type="text" data-bind="openrouter_vision_model" maxlength="120" value="${esc(cfg.openrouter_vision_model || 'google/gemini-2.5-flash')}" placeholder="google/gemini-2.5-flash"><small>Escolha um modelo multimodal que aceite imagens para comparar as miniaturas com a narração.</small></label>
       </div>
       ${editing ? '<div class="note info" style="margin-top:14px">As fontes valem para <b>Buscar tudo de novo</b>. O ritmo das cenas só pode ser escolhido ao criar o projeto.</div>' : `
       <div class="field" style="margin-top:18px"><span>Ritmo das cenas</span><div class="choices">${Object.entries(c.pacing).map(([k, l]) => `<button type="button" class="choice ${cfg.pacing === k ? 'on' : ''}" data-set="pacing" data-val="${k}"><b>${l}</b><small>${pacingDesc[k] || ''}</small></button>`).join('')}</div></div>`}
     </div>
-    <div class="card">
-      <div class="card-title"><div><h3>${ic('spark')} Gerar com IA (Google Flow)</h3><p>Para a cena que nenhum banco resolve, o robô gera uma imagem (Nano Banana) ou um clipe (Veo).</p></div>${c.flow.ready ? '<span class="pill ok">● Gemini API conectada</span>' : '<span class="pill key">falta GEMINI_API_KEY</span>'}</div>
-      <div class="note info">O Google Flow não tem API pública. Por isso o estúdio chama os mesmos modelos pela <b>Gemini API</b> (${esc(c.flow.video_model)} · ${esc(c.flow.image_model)}). Em cada cena, abra <b>Gerar com IA</b> na revisão. O Veo é cobrado na sua chave e o resultado não aparece no seu projeto do Flow.</div>
-    </div>`;
+
   },
 
   style(ctx) {
@@ -547,6 +556,14 @@ function bindContext(ctx) {
     const del = t.closest('[data-del-music]'); if (del) { e.stopPropagation(); return deleteMusic(del.dataset.delMusic); }
     const mu = t.closest('[data-music]');
     if (mu) { ctx.cfg.audio.music_id = mu.dataset.music || null; $$('[data-music]', c).forEach(r => r.classList.toggle('on', r === mu)); return; }
+    const stockSearch = t.closest('[data-stock-search]');
+    if (stockSearch) {
+      const query = c.querySelector('#externalStockQuery')?.value?.trim();
+      if (!query) { toast('Digite o que deseja encontrar.'); return; }
+      const source = (S.catalog.external_sources || []).find(s => s.id === stockSearch.dataset.stockSearch);
+      if (source) window.open(source.search_prefix + encodeURIComponent(query), '_blank', 'noopener,noreferrer');
+      return;
+    }
     const q = t.closest('[data-quick]');
     if (q) {
       const all = S.catalog.sources, k = q.dataset.quick;
@@ -1099,7 +1116,7 @@ $('#projectList').addEventListener('click', async e => {
   const open = e.target.closest('[data-open]'); if (open) openProject(open.dataset.open);
 });
 
-const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', flow: 'viewFlow', flowblocks: 'viewFlowBlocks', groq: 'viewGroq', keys: 'viewKeys', skills: 'viewSkills', 'skills-video': 'viewSkillsVideo', 'media-library': 'viewMediaLibrary' };
+const VIEW_ID = { create: 'viewCreate', projects: 'viewProjects', project: 'viewProject', groq: 'viewGroq', keys: 'viewKeys', 'skills-video': 'viewSkillsVideo', 'media-library': 'viewMediaLibrary' };
 function showView(name) {
   Object.keys(VIEW_ID).forEach(v => {
     const el = $('#' + VIEW_ID[v]);
@@ -1109,10 +1126,7 @@ function showView(name) {
   window.scrollTo(0, 0);
   if (name !== 'project') { stopPoll(); S.projectId = null; history.replaceState(null, '', location.pathname); }
   if (name === 'keys') loadKeysView();
-  if (name === 'flow') { loadFlowView(); startFlowPoll(); loadFlowAgentConfig().catch(() => {}); } else { stopFlowPoll(); }
-  if (name === 'flowblocks') loadFlowBlocksView();
   if (name === 'groq') loadGroqView();
-  if (name === 'skills') loadSkillsView();
   if (name === 'skills-video') loadSkillsVideoView();
   if (name === 'media-library') checkStoryblocksConnection();
 }
@@ -1941,15 +1955,19 @@ $('#viewProject').addEventListener('keydown', e => {
 /* ---------- cenas */
 function sceneHtml(s, i, p) {
   const opts = s.options || [], sel = Math.min(s.selected || 0, Math.max(0, opts.length - 1)), o = opts[sel];
-  const gen = s.gen || {}, flowOk = S.catalog.flow.ready;
+  const stockOnly = p.settings?.stock_only !== false;
+  const gen = s.gen || {}, flowOk = !stockOnly && S.catalog.flow.ready;
   const img = o && o.thumbnail ? `<img loading="lazy" referrerpolicy="no-referrer" alt="" src="${esc(o.thumbnail)}" onerror="this.style.display='none'">` : ic('image');
-  const strip = opts.map((x, k) => `<button type="button" class="opt ${k === sel ? 'on' : ''}" data-pick="${k}" title="${esc(`${x.provider} · ${x.photographer || ''}${x.media_match_score != null ? ' · IA ' + x.media_match_score + '%' : ''}`)}"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>${x.media_type === 'video' ? '▶' : 'FOTO'}</i></button>`).join('');
+  const strip = opts.map((x, k) => x.preview_only && String(x.provider || '').startsWith('YouTube')
+    ? \`<button type="button" class="opt" data-match-youtube data-yturl="\${esc(x.download_url || x.source_url || '')}" title="Analisar vídeo e localizar o trecho que combina com esta fala"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="\${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>ANALISAR</i></button>\`
+    : \`<button type="button" class="opt \${k === sel ? 'on' : ''}" data-pick="\${k}" title="\${esc(\`\${x.provider} · \${x.photographer || ''}\${x.media_match_score != null ? ' · IA ' + x.media_match_score + '%' : ''}\`)}"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="\${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>\${x.media_type === 'video' ? '▶' : 'FOTO'}</i></button>\`).join('');
   const line = o ? `<div class="src-line"><span>${esc(o.provider)}</span>${o.photographer ? `<span>· ${esc(o.photographer)}</span>` : ''}${o.license ? `<span>· ${esc(o.license)}</span>` : ''}${o.source_url ? `<a href="${esc(o.source_url)}" target="_blank" rel="noopener">origem ${ic('link')}</a>` : ''}</div>` : '';
   const matchInfo = o && o.media_match_score != null ? `<small class="hint"><b>Compatibilidade visual da IA: ${Math.round(Number(o.media_match_score))}%</b>${o.media_match_reason ? ` · ${esc(o.media_match_reason)}` : ''}</small>` : '';
+  const verificationInfo = o && !o.relevance_verified && s.media_verification?.status === 'unavailable' ? `<small class="hint">Prévia ainda não validada pela IA: ${esc(s.media_verification.message || 'verifique se a imagem corresponde à fala antes de montar.')}</small>` : '';
   const rejectedInfo = !opts.length && Number(s.rejected_media_count || 0) > 0 ? ` A IA conferiu as prévias e descartou ${Number(s.rejected_media_count)} resultado(s) que não correspondiam à fala.` : '';
   const searchUsageInfo = s.search_usage ? `<small class="hint">Consultas aos bancos: ${Number(s.search_usage.requests || 0)}/${Number(s.search_usage.limit || 0)}${s.search_usage.limit_reached ? ' · limite atingido' : ''}</small>` : '';
   const open = S.genOpen[s.id];
-  const genBox = open ? `<div class="gen-box"><div class="seg"><button type="button" class="${open.kind === 'image' ? 'on' : ''}" data-genkind="image">Imagem · Nano Banana</button><button type="button" class="${open.kind === 'video' ? 'on' : ''}" data-genkind="video">Vídeo · Veo</button></div><textarea data-genprompt placeholder="Descreva a cena…">${esc(open.prompt)}</textarea><div class="row">${open.kind === 'video' ? `<select data-gensec style="width:auto">${[4, 6, 8].map(n => `<option value="${n}" ${open.seconds === n ? 'selected' : ''}>${n} s</option>`).join('')}</select>` : ''}<button type="button" class="btn primary small" data-gen="go">${ic('spark')} Gerar</button><button type="button" class="btn ghost small" data-gen="close">Fechar</button></div><small class="hint">${open.kind === 'video' ? 'O Veo cobra por segundo na sua chave Gemini e leva alguns minutos.' : 'A imagem sai em alguns segundos e entra nas opções da cena.'}</small></div>` : '';
+  const genBox = open && !stockOnly ? `<div class="gen-box"><div class="seg"><button type="button" class="${open.kind === 'image' ? 'on' : ''}" data-genkind="image">Imagem · Nano Banana</button><button type="button" class="${open.kind === 'video' ? 'on' : ''}" data-genkind="video">Vídeo · Veo</button></div><textarea data-genprompt placeholder="Descreva a cena…">${esc(open.prompt)}</textarea><div class="row">${open.kind === 'video' ? `<select data-gensec style="width:auto">${[4, 6, 8].map(n => `<option value="${n}" ${open.seconds === n ? 'selected' : ''}>${n} s</option>`).join('')}</select>` : ''}<button type="button" class="btn primary small" data-gen="go">${ic('spark')} Gerar</button><button type="button" class="btn ghost small" data-gen="close">Fechar</button></div><small class="hint">${open.kind === 'video' ? 'O Veo cobra por segundo na sua chave Gemini e leva alguns minutos.' : 'A imagem sai em alguns segundos e entra nas opções da cena.'}</small></div>` : '';
   const genMsg = gen.status === 'running' ? `<div class="gen-msg"><span class="spin"></span>${esc(gen.message || 'Gerando…')}</div>` : gen.status === 'failed' ? `<div class="gen-msg fail">${ic('alert')} ${esc(gen.message || 'Falhou')}</div>` : '';
   const ytOpen = S.ytOpen[s.id];
   const ytBox = ytOpen ? `
@@ -1963,11 +1981,11 @@ function sceneHtml(s, i, p) {
       <button type="button" class="btn ghost small" data-act2="search-yt" title="Buscar no YouTube">${ic('search')} Buscar</button>
     </div>
     <div class="row">
-      <button type="button" class="btn primary small" data-act2="download-yt">${ic('download')} Baixar link e usar na cena</button>
+      <button type="button" class="btn primary small" data-act2="extract-yt">${ic('scan-search')} Analisar e recortar trecho</button>
     </div>
     <div class="yt-results-strip" data-ytresults style="${(ytOpen.results || []).length ? '' : 'display:none'}">
       ${(ytOpen.results || []).map(r => `
-        <button type="button" class="yt-opt" data-act2="pick-yt" data-yturl="${esc(r.download_url)}" title="${esc(r.title)}">
+        <button type="button" class="yt-opt" data-act2="extract-yt-pick" data-yturl="${esc(r.download_url)}" title="${esc(r.title)}">
           <img src="${esc(r.thumbnail)}" alt="" referrerpolicy="no-referrer">
           <span>${esc(r.title)}</span>
         </button>
@@ -1978,7 +1996,7 @@ function sceneHtml(s, i, p) {
   return `<article class="scene" data-scene="${s.id}" data-i="${i}"><div class="scene-pv">${img}<span class="scene-no">CENA ${String(i + 1).padStart(2, '0')}</span><span class="scene-t">${fmtTime(s.start)} – ${fmtTime(s.end)}</span>${o ? `<span class="scene-type" style="top:8px;bottom:auto;right:auto">${o.media_type === 'video' ? 'VÍDEO' : 'FOTO'}</span>` : ''}</div>
   <div class="scene-body"><div class="scene-text">${esc(s.text)}</div>
   <div class="q-row"><input type="text" data-q value="${esc(s.query || '')}" maxlength="160" title="Termos de busca"><button type="button" class="mini" data-act2="research" title="Buscar de novo">${ic('search')}</button></div>
-  ${opts.length ? `<div class="opt-strip">${strip}</div>${line}${matchInfo}` : `<div class="scene-empty">Nenhuma mídia compatível foi encontrada. Mude a busca, escolha outras fontes ou envie um arquivo.${esc(rejectedInfo)}</div>`}
+  ${opts.length ? `<div class="opt-strip">${strip}</div>${line}${matchInfo}${verificationInfo}` : `<div class="scene-empty">Nenhuma mídia compatível foi encontrada. Mude a busca, escolha outras fontes ou envie um arquivo.${esc(rejectedInfo)}</div>`}
   ${searchUsageInfo}
   ${(s.search_notes || []).length ? `<small class="hint">${esc(s.search_notes.join(' · '))}</small>` : ''}
   <div class="scene-actions"><label class="btn ghost upl">${ic('upload')} Meu arquivo<input type="file" data-upload accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.m4v"></label>${flowOk ? `<button type="button" class="btn ghost" data-act2="gen">${ic('spark')} Gerar com IA</button>` : ''}<button type="button" class="btn ghost" data-act2="yt">${ic('film')} YouTube</button></div>
@@ -1997,9 +2015,19 @@ function replaceScene(sc) {
 }
 $('#sceneGrid').addEventListener('click', async e => {
   const card = e.target.closest('.scene'); if (!card) return; const sid = card.dataset.scene, p = S.project, id = S.projectId;
-  const pick = e.target.closest('[data-pick]'), a2 = e.target.closest('[data-act2]'), g = e.target.closest('[data-gen]'), gk = e.target.closest('[data-genkind]');
+  const pick = e.target.closest('[data-pick]'), a2 = e.target.closest('[data-act2]'), g = e.target.closest('[data-gen]'), gk = e.target.closest('[data-genkind]'), ytm = e.target.closest('[data-match-youtube]');
   try {
-    if (pick) { const r = await jpost(`/api/projects/${id}/scenes/${sid}`, { selected: Number(pick.dataset.pick) }, 'PATCH'); replaceScene(r.scene); }
+    if (ytm) {
+      const url = ytm.dataset.yturl;
+      if (!url || !window.confirm("Você confirma que é dono deste vídeo ou possui licença/permissão expressa para reutilizá-lo? O OpenRouter vai analisar a linha do tempo, localizar o trecho que combina com a fala atual do SRT e importar um clipe de até dez segundos, além de salvar um quadro do mesmo trecho. O aplicativo não verifica a licença automaticamente.")) return;
+      ytm.disabled = true;
+      try {
+        toast('OpenRouter analisando a linha do tempo do YouTube…');
+        const res = await jpost('/api/youtube/download', { url, project_id: id, scene_id: sid, rights_confirmed: true });
+        delete S.ytOpen[sid]; replaceScene(res.scene);
+        toast('Trecho sincronizado importado: vídeo de até ' + Number(res.match?.duration || 0).toFixed(1) + ' s + quadro.');
+      } catch (err) { toast(err.message); ytm.disabled = false; }
+    } else if (pick) { const r = await jpost(`/api/projects/${id}/scenes/${sid}`, { selected: Number(pick.dataset.pick) }, 'PATCH'); replaceScene(r.scene); }
     else if (a2 && a2.dataset.act2 === 'research') {
       const q = $('[data-q]', card).value.trim(); a2.disabled = true; a2.innerHTML = '<span class="spin"></span>';
       const r = await jpost(`/api/projects/${id}/scenes/${sid}/search`, { query: q || null }); replaceScene(r.scene);
@@ -2020,21 +2048,25 @@ $('#sceneGrid').addEventListener('click', async e => {
         replaceScene(p.scenes.find(x => x.id === sid));
         toast(`${(res.results || []).length} vídeos encontrados no YouTube.`);
       } catch (err) { toast(err.message); } finally { a2.disabled = false; a2.innerHTML = old; }
-    } else if (a2 && a2.dataset.act2 === 'download-yt') {
+    } else if (a2 && a2.dataset.act2 === 'extract-yt') {
       const inp = $('[data-ytinput]', card); const url = (inp ? inp.value : '').trim();
       if (!url) return toast('Informe a URL do vídeo do YouTube.');
-      a2.disabled = true; a2.innerHTML = '<span class="spin"></span> Baixando…'; toast('Baixando vídeo do YouTube com yt-dlp…');
+      if (!window.confirm("Você confirma que é dono deste vídeo ou possui licença/permissão expressa para reutilizá-lo? O OpenRouter vai analisar a linha do tempo, localizar o trecho que combina com a fala atual do SRT e importar um clipe de até dez segundos, além de salvar um quadro do mesmo trecho. O aplicativo não verifica a licença automaticamente.")) return;
+      a2.disabled = true; a2.innerHTML = '<span class="spin"></span> Analisando…';
       try {
-        const res = await jpost('/api/youtube/download', { url, project_id: id, scene_id: sid });
-        delete S.ytOpen[sid]; replaceScene(res.scene); toast('Vídeo do YouTube importado para a cena!');
-      } catch (err) { toast(err.message); a2.disabled = false; a2.innerHTML = `${ic('download')} Baixar link e usar na cena`; }
-    } else if (a2 && a2.dataset.act2 === 'pick-yt') {
+        const res = await jpost('/api/youtube/download', { url, project_id: id, scene_id: sid, rights_confirmed: true });
+        delete S.ytOpen[sid]; replaceScene(res.scene);
+        toast('Trecho sincronizado importado: vídeo de até ' + Number(res.match?.duration || 0).toFixed(1) + ' s + quadro.');
+      } catch (err) { toast(err.message); a2.disabled = false; a2.innerHTML = `${ic('scan-search')} Analisar e recortar trecho`; }
+    } else if (a2 && a2.dataset.act2 === 'extract-yt-pick') {
       const url = a2.dataset.yturl; if (!url) return;
-      toast('Baixando opção escolhida do YouTube…');
+      if (!window.confirm("Você confirma que é dono deste vídeo ou possui licença/permissão expressa para reutilizá-lo? O OpenRouter vai analisar a linha do tempo, localizar o trecho que combina com a fala atual do SRT e importar um clipe de até dez segundos, além de salvar um quadro do mesmo trecho. O aplicativo não verifica a licença automaticamente.")) return;
+      a2.disabled = true;
       try {
-        const res = await jpost('/api/youtube/download', { url, project_id: id, scene_id: sid });
-        delete S.ytOpen[sid]; replaceScene(res.scene); toast('Vídeo do YouTube adicionado à cena!');
-      } catch (err) { toast(err.message); }
+        const res = await jpost('/api/youtube/download', { url, project_id: id, scene_id: sid, rights_confirmed: true });
+        delete S.ytOpen[sid]; replaceScene(res.scene);
+        toast('Trecho sincronizado importado: vídeo de até ' + Number(res.match?.duration || 0).toFixed(1) + ' s + quadro.');
+      } catch (err) { toast(err.message); a2.disabled = false; }
     } else if (gk) { S.genOpen[sid].kind = gk.dataset.genkind; replaceScene(p.scenes.find(x => x.id === sid)); }
     else if (g && g.dataset.gen === 'close') { delete S.genOpen[sid]; replaceScene(p.scenes.find(x => x.id === sid)); }
     else if (g && g.dataset.gen === 'go') {

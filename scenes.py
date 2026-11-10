@@ -48,7 +48,7 @@ def parse_srt(text: str) -> list[dict[str, Any]]:
             continue
         start, end = to_seconds(match.group("start")), to_seconds(match.group("end"))
         if end > start:
-            cues.append({"start": start, "end": end, "text": cue_text})
+            cues.append({"id": f"cue-{len(cues) + 1:06d}", "start": start, "end": end, "text": cue_text})
     cues.sort(key=lambda c: (c["start"], c["end"]))
     if not cues:
         raise ValueError("O arquivo SRT não contém legendas válidas. Confira o formato e os horários.")
@@ -261,6 +261,14 @@ def _scene(cues: list[dict[str, Any]], number: int, lang: str, extra: str) -> di
         "id": f"scene-{number:03d}", "start": cues[0]["start"], "end": cues[-1]["end"],
         "text": text[:1200], "query": query,
         "search_queries": query_variants(text, lang, extra, 3),
+        # Preserva cada cue original para que a pesquisa visual possa interpretar
+        # cada bloco SRT separadamente, sem perder texto nem timestamps.
+        "source_cues": [
+            {"id": str(cue.get("id") or f"cue-{index + 1:06d}"), "start": float(cue["start"]),
+             "end": float(cue["end"]), "text": str(cue["text"])}
+            for index, cue in enumerate(cues)
+        ],
+        "cue_visual_plans": [],
         "search_notes": [],
         "options": [], "selected": 0, "status": "pending",
     }
@@ -300,33 +308,9 @@ def _fit_groups_to_limit(groups: list[list[dict[str, Any]]], max_scenes: int) ->
 
 
 def group_cues(cues: list[dict[str, Any]], pacing: str, lang: str, extra: str, max_scenes: int) -> tuple[list[dict[str, Any]], bool]:
-    """Agrupa legendas em cenas conforme o ritmo. Retorna (cenas, ritmo_foi_limitado)."""
-    rule = PACING.get(pacing, PACING["balanced"])
-    max_span, max_words = rule["span"], rule["words"]
-    groups: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-    group_start = 0.0
-    for cue in cues:
-        if not current:
-            current, group_start = [cue], cue["start"]
-            continue
-        words = sum(len(c["text"].split()) for c in current)
-        if cue["end"] - group_start > max_span or words + len(cue["text"].split()) > max_words:
-            groups.append(current)
-            current, group_start = [cue], cue["start"]
-        else:
-            current.append(cue)
-    if current:
-        groups.append(current)
-
-    try:
-        scene_limit = max(1, int(max_scenes))
-    except (TypeError, ValueError):
-        scene_limit = 120
-    capped = len(groups) > scene_limit
-    if capped:
-        groups = _fit_groups_to_limit(groups, scene_limit)
-    return [_scene(g, n + 1, lang, extra) for n, g in enumerate(groups)], capped
+    """Cria uma cena por cue SRT. max_scenes fica por compatibilidade, sem descartar cues."""
+    scenes = [_scene([cue], n + 1, lang, extra) for n, cue in enumerate(cues)]
+    return scenes, False
 
 
 def _quality_score(option: dict[str, Any]) -> float:
@@ -383,11 +367,17 @@ def auto_pick(scenes: list[dict[str, Any]], pref: str, ratio: str, video_percent
         options = scene.get("options") or []
         if not options:
             continue
+        usable = [(i, option) for i, option in enumerate(options) if not option.get("preview_only")]
+        if not usable:
+            # Candidatos do YouTube precisam passar pela extração autorizada antes do render.
+            scene["selected"] = -1
+            scene["media_target_fallback"] = True
+            continue
         dur = max(0.5, float(scene["end"]) - float(scene["start"]))
         target = scene.get("target_media_type")
-        preferred = [(i, option) for i, option in enumerate(options) if option.get("media_type") == target]
+        preferred = [(i, option) for i, option in usable if option.get("media_type") == target]
         # Não deixa uma cena sem mídia se a cota escolhida não existe nos bancos marcados.
-        candidates = preferred or list(enumerate(options))
+        candidates = preferred or usable
         scene["media_target_fallback"] = not bool(preferred)
         best_i, best_score = candidates[0][0], -1e9
         for i, option in candidates:

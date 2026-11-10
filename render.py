@@ -314,6 +314,30 @@ def cortar_silencios(audio_path: Path, limiar: str = "-50dB", pausa_maxima: floa
 
 # ------------------------------------------------------------------ render
 
+def _scene_frame_windows(scenes: list[dict[str, Any]], audio_len: float, fps: int) -> list[dict[str, int]]:
+    """Calcula o intervalo de timeline e o intervalo ativo exato de cada cue SRT."""
+    windows: list[dict[str, int]] = []
+    for index, scene in enumerate(scenes):
+        start = 0.0 if index == 0 else max(0.0, float(scene.get("start") or 0.0))
+        next_start = float(scenes[index + 1].get("start") or audio_len) if index + 1 < len(scenes) else audio_len
+        slot_end = min(audio_len, max(start + 0.25, next_start))
+        cue_end = min(audio_len, max(start + 0.25, float(scene.get("end") or slot_end)))
+        active_end = min(slot_end, cue_end)
+        start_frame = round(start * fps)
+        slot_end_frame = max(start_frame + 6, round(slot_end * fps))
+        active_end_frame = min(slot_end_frame, max(start_frame + 6, round(active_end * fps)))
+        windows.append({
+            "start_frame": start_frame,
+            "end_frame": slot_end_frame,
+            "active_frames": active_end_frame - start_frame,
+            "total_frames": slot_end_frame - start_frame,
+        })
+        scene["render_start"] = start_frame / fps
+        scene["render_end"] = active_end_frame / fps
+        scene["render_slot_end"] = slot_end_frame / fps
+    return windows
+
+
 def render_project(pid: str) -> None:
     T = Tracker(pid)
     try:
@@ -358,13 +382,11 @@ def render_project(pid: str) -> None:
         if not scenes:
             raise RuntimeError("Nenhuma cena foi encontrada. Reenvie um arquivo SRT válido.")
 
-        # cada cena vai até o início da próxima; contagem em frames inteiros evita deriva de sincronia
-        for i, scene in enumerate(scenes):
-            start = 0.0 if i == 0 else float(scene["start"])
-            nxt = float(scenes[i + 1]["start"]) if i + 1 < len(scenes) else audio_len
-            scene["render_start"] = max(0.0, start)
-            scene["render_end"] = min(audio_len, max(scene["render_start"] + 0.25, nxt))
-        boundaries = [round(s["render_start"] * FPS) for s in scenes] + [round(audio_len * FPS)]
+        # Cada mídia fica ativa exatamente durante o cue SRT. Se houver silêncio
+        # entre cues, o último quadro é mantido até o próximo bloco, sem adiantar
+        # nem atrasar o início da mídia seguinte.
+        frame_windows = _scene_frame_windows(scenes, audio_len, FPS)
+        boundaries = [window["start_frame"] for window in frame_windows] + [round(audio_len * FPS)]
         transition = str(style.get("transition", "cut"))
         tr_info = styles.TRANSITIONS.get(transition, styles.TRANSITIONS["cut"])
         use_xfade = bool(tr_info.get("mode") == "xfade" and len(scenes) > 1 and ffmpeg_has_filter("xfade"))
@@ -386,13 +408,18 @@ def render_project(pid: str) -> None:
         segments: list[Path] = []
         for idx, scene in enumerate(scenes):
             T.check()
+            window = frame_windows[idx]
             frames = max(6, boundaries[idx + 1] - boundaries[idx])
+            active_frames = min(frames, max(6, window["active_frames"]))
+            gap_frames = max(0, frames - active_frames)
             segment = work / f"segment_{idx:04d}.mp4"
             info = media.get(scene["id"])
             out_args = ["-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p", "-r", str(FPS), "-video_track_timescale", "12288", str(segment)]
             if info:
                 is_image = info["media_type"] == "image" or (info["info"]["duration"] <= 0.1)
-                vf, needs_loop = styles.segment_filter(style, width, height, FPS, frames, idx, is_image=is_image, first=idx == 0, last=idx == len(scenes) - 1, ratio=ratio)
+                vf, needs_loop = styles.segment_filter(style, width, height, FPS, active_frames, idx, is_image=is_image, first=idx == 0, last=idx == len(scenes) - 1, ratio=ratio)
+                if gap_frames:
+                    vf = f"{vf},trim=end_frame={active_frames},tpad=stop_mode=clone:stop_duration={gap_frames / FPS:.3f}"
                 if is_image:
                     inp = ["-loop", "1", "-i", str(info["path"])] if needs_loop else ["-i", str(info["path"])]
                 else:

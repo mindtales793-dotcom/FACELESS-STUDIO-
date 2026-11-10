@@ -573,8 +573,8 @@ def test_limite_global_de_consultas_por_cena(monkeypatch):
 
     assert chamadas == [
         ("consulta principal", "video"),
-        ("consulta principal", "image"),
-        ("consulta dois", "video"),
+        ("consulta dois", "image"),
+        ("consulta três", "video"),
     ]
     assert options == []
     assert usage["requests"] == 3

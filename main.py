@@ -58,9 +58,9 @@ from store import (
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
 try:
-    MAX_SCENES = max(1, int(os.getenv("MAX_SCENES", "120")))
+    MAX_SCENES = max(1, int(os.getenv("MAX_SCENES", "1000")))
 except (TypeError, ValueError):
-    MAX_SCENES = 120
+    MAX_SCENES = 1000
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "800"))
 AUDIO_EXT = (".mp3", ".wav", ".m4a", ".aac", ".ogg")
 MEDIA_IMG = (".jpg", ".jpeg", ".png", ".webp")
@@ -95,8 +95,11 @@ def normalize_settings(raw: dict[str, Any] | None, base: dict[str, Any] | None =
     out["quality"] = raw.get("quality", cur.get("quality", "720p"))
     if out["quality"] not in ("720p", "1080p"):
         out["quality"] = "720p"
-    sources = raw.get("sources", cur.get("sources", ["pexels_video"]))
-    out["sources"] = [s for s in sources if s in providers.SOURCE_IDS] if isinstance(sources, list) else ["pexels_video"]
+    default_sources = [s["id"] for s in providers.public_sources() if s["kind"] in ("video", "image") and s["ready"] and s["id"] != "youtube_frame"]
+    if "youtube_video" not in default_sources:
+        default_sources.append("youtube_video")
+    sources = raw.get("sources", cur.get("sources", default_sources))
+    out["sources"] = [s for s in sources if s in providers.SOURCE_IDS] if isinstance(sources, list) else default_sources
     out["media_pref"] = raw.get("media_pref", cur.get("media_pref", "mixed"))
     if out["media_pref"] not in ("mixed", "video", "image"):
         out["media_pref"] = "mixed"
@@ -104,6 +107,11 @@ def normalize_settings(raw: dict[str, Any] | None, base: dict[str, Any] | None =
     # O limite superior é fixo em 10 s; pode ser reduzido por projeto.
     out["max_video_seconds"] = int(_num(raw.get("max_video_seconds", cur.get("max_video_seconds", 10)), 1, 10, 10))
     out["openrouter_model"] = " ".join(str(raw.get("openrouter_model", cur.get("openrouter_model", os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")))).split())[:120]
+    out["openrouter_vision_model"] = " ".join(str(raw.get("openrouter_vision_model", cur.get("openrouter_vision_model", os.getenv("OPENROUTER_VISION_MODEL", "google/gemini-2.5-flash")))).split())[:120]
+    out["semantic_scene_grouping"] = bool(raw.get("semantic_scene_grouping", cur.get("semantic_scene_grouping", True)))
+    out["stock_only"] = bool(raw.get("stock_only", cur.get("stock_only", True)))
+    # stock_only desativa geração artificial; fontes reais do YouTube continuam disponíveis
+    # como prévias e só podem ser importadas após extração semântica e confirmação de direitos.
     out["per_source"] = int(_num(raw.get("per_source", cur.get("per_source", 3)), 1, 8, 3))
     # Limite global de consultas aos bancos por cena (cada fonte x consulta conta como uma).
     out["max_search_requests"] = int(_num(raw.get("max_search_requests", cur.get("max_search_requests", 12)), 1, 24, 12))
@@ -170,14 +178,26 @@ def _verify_scene_options(
     if not options:
         report = {"status": "empty", "checked": 0, "accepted": 0, "rejected": 0, "threshold": 68}
     else:
-        options, report = media_relevance.verify_scene_candidates(
-            scene_text=str(scene.get("text") or ""),
-            visual_description=str(scene.get("visual_description") or ""),
-            context=context,
-            candidates=options,
-            model=settings.get("openrouter_model"),
-            min_score=68,
-        )
+        # Miniatura não comprova o conteúdo de um vídeo. Candidatos do YouTube aguardam
+        # análise temporal do vídeo inteiro e confirmação de direitos na ação de importação.
+        manual_candidates = [item for item in options if item.get("preview_only")]
+        verifiable_candidates = [item for item in options if not item.get("preview_only")]
+        if verifiable_candidates:
+            verified, report = media_relevance.verify_scene_candidates(
+                scene_text=str(scene.get("text") or ""),
+                visual_description=str(scene.get("visual_description") or ""),
+                context=context,
+                candidates=verifiable_candidates,
+                model=settings.get("openrouter_vision_model") or settings.get("openrouter_model"),
+                min_score=68,
+            )
+            options = verified + manual_candidates
+        else:
+            report = {
+                "status": "manual_required" if manual_candidates else "empty",
+                "checked": 0, "accepted": 0, "rejected": 0, "threshold": 68,
+                "message": "O YouTube requer análise do vídeo e confirmação de direitos antes da importação." if manual_candidates else "",
+            }
     scene["media_verification"] = report
     scene["rejected_media_count"] = int(report.get("rejected") or 0)
     return options, report
@@ -193,10 +213,13 @@ def analyze_project(pid: str) -> None:
         state = read_state(pid)
         settings = state["settings"]
         scenes = state["scenes"]
+        # Uma cena corresponde a um único cue SRT. Não reagrupar por semântica,
+        # pois isso quebraria a relação um-para-um entre fala, tempo e mídia.
+        T.log(f"Sincronização individual: {len(scenes)} blocos SRT serão pesquisados nos próprios intervalos.", stage="parse")
         if not settings["sources"]:
             raise RuntimeError("Selecione pelo menos uma fonte de mídia na aba Mídia.")
         patch_state(pid, lambda s: s.update({"status": "searching", "error": None, "cancel_requested": False, "progress": 0, "message": "Buscando mídia nos bancos selecionados..."}))
-        T.update(stage="search", status="running", detail=f"0 de {len(scenes)} cenas", progress=0,
+        T.update(stage="search", status="running", detail=f"0 de {len(scenes)} blocos SRT", progress=0,
                  log=f"Buscando em {len(settings['sources'])} fontes para {len(scenes)} cenas.")
         orientation = providers.orientation_for(settings["ratio"])
         counts: dict[str, int] = {}
@@ -226,15 +249,45 @@ def analyze_project(pid: str) -> None:
                         max_consultas=3,
                         contexto=local_context,
                         model=settings.get("openrouter_model"),
+                        cue_texts=scene.get("source_cues") or [],
                     )
-                    queries = [str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()]
+                    cue_plans = plan.get("cue_plans") or []
+                    if not cue_plans:
+                        # Compatibilidade com modelos que retornam somente o plano geral:
+                        # mantém uma pesquisa de fallback individual para cada cue.
+                        cue_plans = [
+                            {
+                                "cue_id": str(cue.get("id") or ""),
+                                "consultas": [str(cue.get("text") or "")[:100]],
+                                "descricao_visual": str(cue.get("text") or "")[:240],
+                                "recommended_media": "video",
+                                "motion_score": 50,
+                                "fallback": True,
+                            }
+                            for cue in (scene.get("source_cues") or [])
+                        ]
+                    scene["cue_visual_plans"] = cue_plans
+                    # Prioriza buscas específicas de cada bloco SRT. As consultas
+                    # gerais da cena entram apenas como complemento.
+                    cue_queries = [
+                        str(query).strip()
+                        for cue_plan in cue_plans
+                        for query in (cue_plan.get("consultas") or [])
+                        if str(query).strip()
+                    ]
+                    queries = list(dict.fromkeys(cue_queries + [
+                        str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()
+                    ]))
                     if queries:
-                        scene["search_queries"] = queries[:3]
+                        scene["search_queries"] = queries[:12]
                         scene["query"] = queries[0]
                     scene["motion_score"] = int(plan.get("motion_score", 50))
                     scene["recommended_media"] = plan.get("recommended_media", "video")
                     scene["visual_description"] = plan.get("descricao_visual", "")
                     scene["query_ai_provider"] = plan.get("provider", "fallback")
+                    if scene["query_ai_provider"] == "fallback":
+                        reason = str(plan.get("fallback_reason") or "sem detalhe")[:140]
+                        T.log(f"OpenRouter indisponível na cena {scene_index + 1}: {reason}. Usando termos locais.", "warn", stage="search")
                 except Exception as exc:
                     T.log(f"IA visual: fallback para busca tradicional nesta cena ({str(exc)[:100]}).", "warn", stage="search")
 
@@ -279,7 +332,7 @@ def analyze_project(pid: str) -> None:
 
             plan_data = {
                 key: scene.get(key) for key in
-                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider", "media_verification", "rejected_media_count", "search_usage")
+                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider", "cue_visual_plans", "media_verification", "rejected_media_count", "search_usage")
                 if key in scene
             }
 
@@ -333,6 +386,8 @@ def analyze_empty_scenes(pid: str, empty_ids: set[str]) -> None:
     try:
         state = read_state(pid)
         settings = state["settings"]
+        if settings.get("stock_only", True):
+            settings["sources"] = [source for source in settings.get("sources", []) if source not in ("youtube_video", "youtube_frame")]
         scenes = [s for s in state["scenes"] if s["id"] in empty_ids]
         if not settings["sources"]:
             raise RuntimeError("Selecione pelo menos uma fonte de mídia na aba Mídia.")
@@ -611,6 +666,7 @@ class YouTubeDownloadBody(BaseModel):
     url: str
     project_id: str | None = None
     scene_id: str | None = None
+    rights_confirmed: bool = False
 
 
 class StoryblocksSearchBody(BaseModel):
@@ -1000,47 +1056,97 @@ async def youtube_download_route(body: YouTubeDownloadBody):
     url = body.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="Informe a URL ou link do vídeo do YouTube.")
+    if not body.rights_confirmed:
+        raise HTTPException(status_code=403, detail="Confirme que você tem licença, permissão ou direitos para reutilizar este vídeo.")
+    if not body.project_id or not body.scene_id:
+        raise HTTPException(status_code=400, detail="A extração sincronizada precisa ser iniciada dentro de uma cena do projeto.")
 
-    if body.project_id and body.scene_id:
-        state = read_state(body.project_id)
-        folder = project_dir(body.project_id)
-        _find_scene(state, body.scene_id)
-        uploads = folder / "uploads"
-        uploads.mkdir(exist_ok=True)
-        name = f"yt_{uuid.uuid4().hex[:8]}.mp4"
-        dest = uploads / name
-        try:
-            youtube_mgr.download_youtube_video(url, dest)
-            info = probe_media(dest)
-            thumb = uploads / f"{name}.jpg"
-            subprocess.run([ffmpeg_path(), "-y", "-ss", "0.3", "-i", str(dest), "-vf", "scale=480:-2", "-frames:v", "1", str(thumb)], capture_output=True, timeout=60)
-            thumb_rel = thumb.name if thumb.exists() else name
-            option = {
-                "id": name, "provider": "YouTube", "media_type": "video", "download_url": url, "local_file": f"uploads/{name}",
-                "thumbnail": f"/api/projects/{body.project_id}/files/{thumb_rel}", "source_url": url, "photographer": "YouTube",
-                "license": "YouTube Video", "width": info["width"], "height": info["height"], "duration": info["duration"],
-            }
-            def fn(s: dict[str, Any]) -> None:
-                sc = _find_scene(s, body.scene_id)
-                sc.setdefault("options", []).insert(0, option)
-                sc["selected"] = 0
-                sc["status"] = "found"
-                s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
-            return {"scene": _find_scene(patch_state(body.project_id, fn), body.scene_id), "option": option}
-        except Exception as exc:
-            dest.unlink(missing_ok=True)
-            raise HTTPException(status_code=500, detail=f"Falha ao baixar vídeo do YouTube: {exc}")
-    else:
-        gallery_dir = DATA_DIR / "youtube_downloads"
-        gallery_dir.mkdir(parents=True, exist_ok=True)
-        name = f"yt_{uuid.uuid4().hex[:8]}.mp4"
-        dest = gallery_dir / name
-        try:
-            youtube_mgr.download_youtube_video(url, dest)
-            return {"ok": True, "file": name, "url": f"/api/youtube/file/{name}"}
-        except Exception as exc:
-            dest.unlink(missing_ok=True)
-            raise HTTPException(status_code=500, detail=str(exc))
+    state = read_state(body.project_id)
+    folder = project_dir(body.project_id)
+    scene = _find_scene(state, body.scene_id)
+    settings = state.get("settings") or {}
+    max_seconds = max(1, min(10, int(settings.get("max_video_seconds", 10))))
+    try:
+        scene_index = next(i for i, item in enumerate(state.get("scenes", [])) if item.get("id") == body.scene_id)
+    except StopIteration:
+        scene_index = 0
+    context = _scene_search_context(state.get("scenes", []), scene_index, state.get("script_text", ""))
+    model = settings.get("openrouter_vision_model") or settings.get("openrouter_model") or "google/gemini-2.5-flash"
+
+    try:
+        match = youtube_mgr.locate_youtube_moment(
+            url, str(scene.get("text") or ""), model=model,
+            max_seconds=max_seconds, context=context,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OpenRouter não conseguiu localizar a cena: {str(exc)[:220]}")
+
+    uploads = folder / "uploads"
+    uploads.mkdir(exist_ok=True)
+    name = f"yt_scene_{uuid.uuid4().hex[:10]}.mp4"
+    thumb_name = f"yt_scene_{uuid.uuid4().hex[:10]}.jpg"
+    dest = uploads / name
+    thumb = uploads / thumb_name
+    ffmpeg = ffmpeg_path()
+    try:
+        youtube_mgr.download_youtube_clip(
+            url, dest, match["start_seconds"], match["duration"], max_duration=max_seconds,
+        )
+        info = probe_media(dest)
+        if not ffmpeg or not Path(ffmpeg).exists():
+            raise RuntimeError("FFmpeg não está disponível para extrair o quadro do trecho.")
+        clip_duration = float(info.get("duration") or 0)
+        frame_time = max(0.0, min(clip_duration - 0.05, clip_duration / 2))
+        subprocess.run(
+            [str(ffmpeg), "-y", "-ss", f"{frame_time:.3f}", "-i", str(dest),
+             "-vf", "scale=640:-2", "-frames:v", "1", "-q:v", "2", str(thumb)],
+            capture_output=True, text=True, timeout=90, check=True,
+        )
+        if not thumb.exists() or thumb.stat().st_size < 1024:
+            raise RuntimeError("O FFmpeg não conseguiu salvar o quadro do trecho escolhido.")
+
+        preview_url = f"/api/projects/{body.project_id}/files/{thumb_name}"
+        score = round(float(match.get("confidence") or 0) * 100)
+        common = {
+            "source_url": match["url"], "photographer": "YouTube",
+            "license": "Importado após confirmação de autorização pelo usuário; confira os termos da fonte.",
+            "thumbnail": preview_url, "width": info.get("width"), "height": info.get("height"),
+            "duration": clip_duration, "source_start_seconds": match["start_seconds"],
+            "source_end_seconds": match["end_seconds"], "media_match_score": score,
+            "media_match_reason": match.get("reason") or match.get("visual_summary") or "Trecho localizado pelo OpenRouter.",
+        }
+        video_option = {
+            **common, "id": name, "provider": "YouTube · trecho localizado",
+            "media_type": "video", "download_url": match["url"], "local_file": f"uploads/{name}",
+        }
+        frame_option = {
+            **common, "id": thumb_name, "provider": "YouTube · quadro extraído",
+            "media_type": "image", "download_url": "", "local_file": f"uploads/{thumb_name}",
+            "duration": None,
+        }
+
+        def save_match(s: dict[str, Any]) -> None:
+            sc = _find_scene(s, body.scene_id)
+            sc["options"] = [video_option, frame_option] + [
+                item for item in sc.get("options", [])
+                if not (item.get("provider", "").startswith("YouTube") and item.get("preview_only"))
+            ]
+            sc["selected"] = 0
+            sc["status"] = "found"
+            sc["youtube_match"] = match
+            s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
+
+        updated = patch_state(body.project_id, save_match)
+        return {
+            "scene": _find_scene(updated, body.scene_id),
+            "option": video_option,
+            "frame_option": frame_option,
+            "match": match,
+        }
+    except Exception as exc:
+        dest.unlink(missing_ok=True)
+        thumb.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Falha ao recortar/importar o trecho autorizado: {str(exc)[:220]}")
 
 
 def _safe_child(folder: Path, name: str) -> Path | None:
@@ -1659,7 +1765,7 @@ def logout():
 @app.get("/api/catalog")
 def catalog():
     return {
-        "sources": providers.public_sources(), "templates": styles.public_templates(), "fonts": styles.FONT_CHOICES,
+        "sources": providers.public_sources(), "external_sources": providers.public_external_sources(), "templates": styles.public_templates(), "fonts": styles.FONT_CHOICES,
         "pacing": {k: v["label"] for k, v in styles.PACING.items()},
         "motions": {k: {"label": v["label"], "hint": v.get("hint", "")} for k, v in styles.MOTIONS.items()},
         "transitions": {k: {"label": v["label"], "mode": v.get("mode", "cut")} for k, v in styles.TRANSITIONS.items()},

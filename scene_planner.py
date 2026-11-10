@@ -13,7 +13,8 @@ from typing import Any
 
 import requests
 
-from scenes import parse_srt
+from scenes import parse_srt, group_cues, _scene
+from styles import PACING
 
 API = "https://generativelanguage.googleapis.com/v1beta"
 IMAGE_MODEL = os.getenv("FLOW_IMAGE_MODEL", "gemini-2.5-flash-image")
@@ -123,12 +124,35 @@ def _parse_json_plan(raw: str) -> dict[str, Any] | None:
         motion = 50
     media = str(value.get("recommended_media") or value.get("tipo_midia") or "video").lower()
     media = "image" if media in ("image", "imagem", "foto", "photo") else "video"
+    cue_plans = []
+    raw_cues = value.get("cue_plans") or value.get("blocos") or []
+    if isinstance(raw_cues, list):
+        for item in raw_cues[:40]:
+            if not isinstance(item, dict):
+                continue
+            cue_queries = item.get("consultas") or item.get("queries") or []
+            if isinstance(cue_queries, str):
+                cue_queries = [cue_queries]
+            cue_media = str(item.get("recommended_media") or item.get("tipo_midia") or media).lower()
+            cue_media = "image" if cue_media in ("image", "imagem", "foto", "photo") else "video"
+            try:
+                cue_motion = max(0, min(100, int(item.get("motion_score", motion))))
+            except (TypeError, ValueError):
+                cue_motion = motion
+            cue_plans.append({
+                "cue_id": str(item.get("cue_id") or item.get("id") or "")[:32],
+                "consultas": [" ".join(str(q).split())[:100] for q in cue_queries if str(q).strip()][:3],
+                "descricao_visual": str(item.get("descricao_visual") or item.get("visual_description") or "")[:300],
+                "recommended_media": cue_media,
+                "motion_score": cue_motion,
+            })
     return {
         "palavras_chave": [str(x)[:50] for x in keywords[:6]],
         "consultas": queries[:4],
         "descricao_visual": str(value.get("descricao_visual") or value.get("visual_description") or "")[:400],
         "motion_score": motion,
         "recommended_media": media,
+        "cue_plans": cue_plans,
     }
 
 
@@ -154,7 +178,7 @@ def _openrouter_plan(prompt: str, model: str | None = None) -> dict[str, Any] | 
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.25,
-            "max_tokens": 500,
+            "max_tokens": 3500,
         },
         timeout=(15, 45),
     )
@@ -172,10 +196,14 @@ def gerar_consultas_para_cena(
     max_consultas: int = 4,
     contexto: str = "",
     model: str | None = None,
+    cue_texts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Gera consultas, descrição e nota de movimento. Prioriza OpenRouter; usa Gemini e texto como fallback."""
+    """Gera consultas para a cena e um plano visual independente para cada cue SRT.
+
+    A cena fornece contexto, mas cada cue mantém sua fala e timestamps originais.
+    """
     if idioma == "auto":
-        idioma = _detect_lang(texto)
+        idioma = _detect_lang(str(texto or "") + " " + str(contexto or ""))
 
     lang_instrucao = {
         "pt": "Escreva consultas em português e também em inglês para os bancos stock.",
@@ -198,19 +226,25 @@ def gerar_consultas_para_cena(
         "objetos, mapas, números, lugares estáticos e cenas simbólicas. Não escolha vídeo apenas para preencher. "
         f"{lang_instrucao}\n\n"
         f"CONTEXTO DO ROTEIRO: {contexto_curto or 'Não fornecido'}\n\n"
-        f"TRECHO ATUAL: {str(texto)[:1200]}\n\n"
-        'Formato: {"palavras_chave":["..."],"consultas":["...","..."],"descricao_visual":"...","motion_score":65,"recommended_media":"video"}'
+        f"TRECHO ATUAL DA CENA: {str(texto)[:1200]}\n\n"
+        "BLOCOS SRT INDIVIDUAIS (cada bloco precisa de sua própria interpretação e consultas; não misture as falas):\n"
+        f"{json.dumps([{'cue_id': str(c.get('id') or ''), 'inicio': c.get('start'), 'fim': c.get('end'), 'fala': str(c.get('text') or '')[:500]} for c in (cue_texts or [])[:40]], ensure_ascii=False)}\n\n"
+        "Inclua cue_plans como uma lista com um item para CADA cue recebido. Cada item deve conter cue_id, consultas (1 a 3 buscas específicas), descricao_visual, motion_score e recommended_media. "
+        "A consulta de cada cue deve corresponder àquela fala; use contexto global e vizinhos apenas para desambiguar. "
+        'Formato: {"palavras_chave":["..."],"consultas":["...","..."],"descricao_visual":"...","motion_score":65,"recommended_media":"video","cue_plans":[{"cue_id":"cue-0001","consultas":["..."],"descricao_visual":"...","motion_score":70,"recommended_media":"video"}]}'
     )
 
     # Primeiro tenta OpenRouter. Erros de rede, crédito ou modelo não interrompem o projeto.
+    openrouter_error = "OPENROUTER_API_KEY não configurada"
     try:
         plan = _openrouter_plan(instrucao, model=model)
         if plan and plan.get("consultas"):
             plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
             plan["provider"] = "openrouter"
             return plan
-    except Exception:
-        pass
+        openrouter_error = "OpenRouter respondeu sem consultas visuais válidas."
+    except Exception as exc:
+        openrouter_error = str(exc)[:180]
 
     # Fallback: Gemini, mantendo o mesmo formato editorial.
     chave = _gemini_key()
@@ -232,6 +266,7 @@ def gerar_consultas_para_cena(
                 if plan and plan.get("consultas"):
                     plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
                     plan["provider"] = "gemini"
+                    plan["fallback_reason"] = openrouter_error
                     return plan
         except Exception:
             pass
@@ -242,7 +277,18 @@ def gerar_consultas_para_cena(
         "descricao_visual": str(texto)[:160],
         "motion_score": 50,
         "recommended_media": "video",
+        "cue_plans": [
+            {
+                "cue_id": str(cue.get("id") or ""),
+                "consultas": [str(cue.get("text") or "")[:80]],
+                "descricao_visual": str(cue.get("text") or "")[:180],
+                "recommended_media": "video",
+                "motion_score": 50,
+            }
+            for cue in (cue_texts or [])[:40]
+        ],
         "provider": "fallback",
+        "fallback_reason": openrouter_error,
     }
 
 
@@ -265,6 +311,131 @@ def planejar_cenas(srt_text: str, idioma: str = "auto", max_cenas: int = 60,
             cena["consultas"] = [cena["texto"][:60]]
         cena["status"] = "pendente"
     return cenas
+
+
+def agrupar_cenas_por_significado(
+    srt_text: str,
+    *,
+    ritmo: str = "balanced",
+    idioma: str = "auto",
+    extra: str = "",
+    max_cenas: int = 120,
+    model: str | None = None,
+) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
+    """Agrupa cues contíguos do SRT por assunto/ação sem alterar texto ou timestamps.
+
+    A IA escolhe somente os limites entre cues. O servidor valida que todos os cues
+    aparecem exatamente uma vez, em ordem, e respeita limites de duração/palavras.
+    Se OpenRouter falhar ou devolver estrutura inválida, usa o agrupamento temporal
+    tradicional; nunca inventa timestamps nem reescreve a legenda.
+    """
+    cues = parse_srt(str(srt_text or ""))
+    language = idioma
+    if language == "auto":
+        language = _detect_lang(" ".join(c["text"] for c in cues[:80]))
+    rule = PACING.get(ritmo, PACING.get("balanced", {"span": 15, "words": 35}))
+    max_span = float(rule.get("span", 15))
+    max_words = int(rule.get("words", 35))
+    key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if not key:
+        scenes, capped = group_cues(cues, ritmo, language, extra, max_cenas)
+        return scenes, capped, {"provider": "temporal_fallback", "reason": "OPENROUTER_API_KEY não configurada", "cues": len(cues)}
+
+    all_groups: list[list[dict[str, Any]]] = []
+    chunk_size = 60
+    try:
+        for offset in range(0, len(cues), chunk_size):
+            chunk = cues[offset:offset + chunk_size]
+            cue_rows = [
+                {"indice": i, "inicio": round(float(c["start"]), 2), "fim": round(float(c["end"]), 2),
+                 "fala": str(c["text"])[:260]}
+                for i, c in enumerate(chunk)
+            ]
+            prompt = (
+                "Você é editor de documentários faceless. Agrupe legendas consecutivas em CENAS VISUAIS coerentes. "
+                "Uma cena deve cobrir uma única ação, situação, local ou ideia visual contínua. "
+                "Mude de cena quando o assunto, a ação, o local ou o tempo mudar. "
+                "Não crie uma cena para cada legenda curta; junte frases que descrevem a mesma ação. "
+                "Nunca misture ações diferentes só para alongar uma cena. "
+                f"Idioma do vídeo: {language}. Ritmo: {ritmo}. Duração desejada por cena: até {max_span:.1f} segundos; "
+                f"alvo de até {max_words} palavras. Uma pequena exceção é aceitável para preservar uma frase completa. "
+                "Responda APENAS JSON válido no formato {\"scene_ends\":[3,7,10]}. "
+                "Cada número é o índice zero-based do ÚLTIMO cue de cada cena. "
+                "Os limites devem ser crescentes, cobrir todos os cues e terminar exatamente no último índice. "
+                "Não altere nem reescreva nenhuma legenda; você está escolhendo apenas os pontos de corte.\n\n"
+                f"CUES DO SRT (índice, início/fim em segundos, fala):\n{json.dumps(cue_rows, ensure_ascii=False)}"
+            )
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "http://localhost:3000",
+                    "X-OpenRouter-Title": "Faceless Studio - Semantic SRT Scenes",
+                },
+                json={
+                    "model": (model or os.getenv("OPENROUTER_MODEL") or "google/gemini-2.5-flash").strip(),
+                    "messages": [
+                        {"role": "system", "content": "Agrupe cues por continuidade visual. Responda somente JSON válido."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 1200,
+                },
+                timeout=(15, 60),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            raw = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+            if isinstance(raw, list):
+                raw = " ".join(str(part.get("text") or "") for part in raw if isinstance(part, dict))
+            first, last = str(raw).find("{"), str(raw).rfind("}")
+            if first < 0 or last <= first:
+                raise ValueError("OpenRouter não devolveu JSON de agrupamento válido.")
+            data = json.loads(str(raw)[first:last + 1])
+            ends = data.get("scene_ends") or data.get("fim_cenas") or []
+            if not isinstance(ends, list) or not ends:
+                raise ValueError("OpenRouter não devolveu limites de cenas.")
+            normalized = [int(value) for value in ends]
+            if normalized != sorted(set(normalized)) or normalized[-1] != len(chunk) - 1:
+                raise ValueError("Os limites não cobrem todos os cues em ordem.")
+            start = 0
+            chunk_groups: list[list[dict[str, Any]]] = []
+            for end in normalized:
+                if end < start or end >= len(chunk):
+                    raise ValueError("Limite de cena fora do SRT.")
+                group = chunk[start:end + 1]
+                words = sum(len(str(c["text"]).split()) for c in group)
+                span = float(group[-1]["end"]) - float(group[0]["start"])
+                if span > max_span * 1.6 or words > max_words * 1.6:
+                    raise ValueError("Agrupamento ultrapassou o limite de segurança do ritmo.")
+                chunk_groups.append(group)
+                start = end + 1
+            if start != len(chunk):
+                raise ValueError("Há legendas sem cena atribuída.")
+            all_groups.extend(chunk_groups)
+    except Exception as exc:
+        scenes, capped = group_cues(cues, ritmo, language, extra, max_cenas)
+        return scenes, capped, {
+            "provider": "temporal_fallback",
+            "reason": f"Agrupamento semântico indisponível: {str(exc)[:180]}",
+            "cues": len(cues),
+        }
+
+    if len(all_groups) > max(1, int(max_cenas)):
+        scenes, capped = group_cues(cues, ritmo, language, extra, max_cenas)
+        return scenes, capped, {
+            "provider": "temporal_fallback",
+            "reason": "O agrupamento semântico excedeu o limite de cenas; aplicado agrupamento seguro.",
+            "cues": len(cues),
+        }
+    scenes = [_scene(group, index + 1, language, extra) for index, group in enumerate(all_groups)]
+    return scenes, False, {
+        "provider": "openrouter",
+        "model": (model or os.getenv("OPENROUTER_MODEL") or "google/gemini-2.5-flash").strip(),
+        "cues": len(cues),
+        "scenes": len(scenes),
+    }
 
 
 def ritmo_para_duracao(ritmo: str) -> tuple[float, float]:
