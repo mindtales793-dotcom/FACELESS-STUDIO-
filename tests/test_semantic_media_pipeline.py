@@ -150,6 +150,26 @@ def test_openrouter_locator_rejeita_video_sem_cena_compativel(monkeypatch):
         )
 
 
+
+
+def test_auto_pick_nao_seleciona_candidato_youtube_sem_extracao(monkeypatch):
+    import scenes as scene_tools
+    planned = [{
+        "id": "scene_1",
+        "start": 0.0,
+        "end": 7.0,
+        "options": [{
+            "id": "yt_candidate",
+            "provider": "YouTube",
+            "media_type": "video",
+            "preview_only": True,
+        }],
+    }]
+
+    scene_tools.auto_pick(planned, "mixed", "16:9", video_percent=100)
+
+    assert planned[0]["selected"] == -1
+
 def test_stock_only_mantem_youtube_como_fonte_real_e_separa_modelo_de_visao(monkeypatch):
     import main
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
