@@ -292,7 +292,7 @@ def analyze_project(pid: str) -> None:
                         str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()
                     ]))
                     if queries:
-                        scene["search_queries"] = queries[:3]
+                        scene["search_queries"] = queries[:12]
                         scene["query"] = queries[0]
                     scene["motion_score"] = int(plan.get("motion_score", 50))
                     scene["recommended_media"] = plan.get("recommended_media", "video")
