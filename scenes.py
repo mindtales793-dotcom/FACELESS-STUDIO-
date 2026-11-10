@@ -48,7 +48,7 @@ def parse_srt(text: str) -> list[dict[str, Any]]:
             continue
         start, end = to_seconds(match.group("start")), to_seconds(match.group("end"))
         if end > start:
-            cues.append({"start": start, "end": end, "text": cue_text})
+            cues.append({"id": f"cue-{len(cues) + 1:06d}", "start": start, "end": end, "text": cue_text})
     cues.sort(key=lambda c: (c["start"], c["end"]))
     if not cues:
         raise ValueError("O arquivo SRT não contém legendas válidas. Confira o formato e os horários.")
@@ -264,7 +264,7 @@ def _scene(cues: list[dict[str, Any]], number: int, lang: str, extra: str) -> di
         # Preserva cada cue original para que a pesquisa visual possa interpretar
         # cada bloco SRT separadamente, sem perder texto nem timestamps.
         "source_cues": [
-            {"id": f"cue-{index + 1:04d}", "start": float(cue["start"]),
+            {"id": str(cue.get("id") or f"cue-{index + 1:06d}"), "start": float(cue["start"]),
              "end": float(cue["end"]), "text": str(cue["text"])}
             for index, cue in enumerate(cues)
         ],
