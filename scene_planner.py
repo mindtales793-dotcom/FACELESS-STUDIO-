@@ -13,7 +13,8 @@ from typing import Any
 
 import requests
 
-from scenes import parse_srt
+from scenes import parse_srt, group_cues, _scene
+from styles import PACING
 
 API = "https://generativelanguage.googleapis.com/v1beta"
 IMAGE_MODEL = os.getenv("FLOW_IMAGE_MODEL", "gemini-2.5-flash-image")
@@ -265,6 +266,131 @@ def planejar_cenas(srt_text: str, idioma: str = "auto", max_cenas: int = 60,
             cena["consultas"] = [cena["texto"][:60]]
         cena["status"] = "pendente"
     return cenas
+
+
+def agrupar_cenas_por_significado(
+    srt_text: str,
+    *,
+    ritmo: str = "balanced",
+    idioma: str = "auto",
+    extra: str = "",
+    max_cenas: int = 120,
+    model: str | None = None,
+) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
+    """Agrupa cues contíguos do SRT por assunto/ação sem alterar texto ou timestamps.
+
+    A IA escolhe somente os limites entre cues. O servidor valida que todos os cues
+    aparecem exatamente uma vez, em ordem, e respeita limites de duração/palavras.
+    Se OpenRouter falhar ou devolver estrutura inválida, usa o agrupamento temporal
+    tradicional; nunca inventa timestamps nem reescreve a legenda.
+    """
+    cues = parse_srt(str(srt_text or ""))
+    language = idioma
+    if language == "auto":
+        language = _detect_lang(" ".join(c["text"] for c in cues[:80]))
+    rule = PACING.get(ritmo, PACING.get("balanced", {"span": 15, "words": 35}))
+    max_span = float(rule.get("span", 15))
+    max_words = int(rule.get("words", 35))
+    key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if not key:
+        scenes, capped = group_cues(cues, ritmo, language, extra, max_cenas)
+        return scenes, capped, {"provider": "temporal_fallback", "reason": "OPENROUTER_API_KEY não configurada", "cues": len(cues)}
+
+    all_groups: list[list[dict[str, Any]]] = []
+    chunk_size = 60
+    try:
+        for offset in range(0, len(cues), chunk_size):
+            chunk = cues[offset:offset + chunk_size]
+            cue_rows = [
+                {"indice": i, "inicio": round(float(c["start"]), 2), "fim": round(float(c["end"]), 2),
+                 "fala": str(c["text"])[:260]}
+                for i, c in enumerate(chunk)
+            ]
+            prompt = (
+                "Você é editor de documentários faceless. Agrupe legendas consecutivas em CENAS VISUAIS coerentes. "
+                "Uma cena deve cobrir uma única ação, situação, local ou ideia visual contínua. "
+                "Mude de cena quando o assunto, a ação, o local ou o tempo mudar. "
+                "Não crie uma cena para cada legenda curta; junte frases que descrevem a mesma ação. "
+                "Nunca misture ações diferentes só para alongar uma cena. "
+                f"Idioma do vídeo: {language}. Ritmo: {ritmo}. Duração desejada por cena: até {max_span:.1f} segundos; "
+                f"alvo de até {max_words} palavras. Uma pequena exceção é aceitável para preservar uma frase completa. "
+                "Responda APENAS JSON válido no formato {\"scene_ends\":[3,7,10]}. "
+                "Cada número é o índice zero-based do ÚLTIMO cue de cada cena. "
+                "Os limites devem ser crescentes, cobrir todos os cues e terminar exatamente no último índice. "
+                "Não altere nem reescreva nenhuma legenda; você está escolhendo apenas os pontos de corte.\n\n"
+                f"CUES DO SRT (índice, início/fim em segundos, fala):\n{json.dumps(cue_rows, ensure_ascii=False)}"
+            )
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "http://localhost:3000",
+                    "X-OpenRouter-Title": "Faceless Studio - Semantic SRT Scenes",
+                },
+                json={
+                    "model": (model or os.getenv("OPENROUTER_MODEL") or "google/gemini-2.5-flash").strip(),
+                    "messages": [
+                        {"role": "system", "content": "Agrupe cues por continuidade visual. Responda somente JSON válido."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 1200,
+                },
+                timeout=(15, 60),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            raw = (((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+            if isinstance(raw, list):
+                raw = " ".join(str(part.get("text") or "") for part in raw if isinstance(part, dict))
+            first, last = str(raw).find("{"), str(raw).rfind("}")
+            if first < 0 or last <= first:
+                raise ValueError("OpenRouter não devolveu JSON de agrupamento válido.")
+            data = json.loads(str(raw)[first:last + 1])
+            ends = data.get("scene_ends") or data.get("fim_cenas") or []
+            if not isinstance(ends, list) or not ends:
+                raise ValueError("OpenRouter não devolveu limites de cenas.")
+            normalized = [int(value) for value in ends]
+            if normalized != sorted(set(normalized)) or normalized[-1] != len(chunk) - 1:
+                raise ValueError("Os limites não cobrem todos os cues em ordem.")
+            start = 0
+            chunk_groups: list[list[dict[str, Any]]] = []
+            for end in normalized:
+                if end < start or end >= len(chunk):
+                    raise ValueError("Limite de cena fora do SRT.")
+                group = chunk[start:end + 1]
+                words = sum(len(str(c["text"]).split()) for c in group)
+                span = float(group[-1]["end"]) - float(group[0]["start"])
+                if span > max_span * 1.6 or words > max_words * 1.6:
+                    raise ValueError("Agrupamento ultrapassou o limite de segurança do ritmo.")
+                chunk_groups.append(group)
+                start = end + 1
+            if start != len(chunk):
+                raise ValueError("Há legendas sem cena atribuída.")
+            all_groups.extend(chunk_groups)
+    except Exception as exc:
+        scenes, capped = group_cues(cues, ritmo, language, extra, max_cenas)
+        return scenes, capped, {
+            "provider": "temporal_fallback",
+            "reason": f"Agrupamento semântico indisponível: {str(exc)[:180]}",
+            "cues": len(cues),
+        }
+
+    if len(all_groups) > max(1, int(max_cenas)):
+        scenes, capped = group_cues(cues, ritmo, language, extra, max_cenas)
+        return scenes, capped, {
+            "provider": "temporal_fallback",
+            "reason": "O agrupamento semântico excedeu o limite de cenas; aplicado agrupamento seguro.",
+            "cues": len(cues),
+        }
+    scenes = [_scene(group, index + 1, language, extra) for index, group in enumerate(all_groups)]
+    return scenes, False, {
+        "provider": "openrouter",
+        "model": (model or os.getenv("OPENROUTER_MODEL") or "google/gemini-2.5-flash").strip(),
+        "cues": len(cues),
+        "scenes": len(scenes),
+    }
 
 
 def ritmo_para_duracao(ritmo: str) -> tuple[float, float]:
