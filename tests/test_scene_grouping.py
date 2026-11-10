@@ -24,7 +24,7 @@ def test_mais_de_120_cues_preserva_um_bloco_por_cena():
     cue_ids = [
         int(match)
         for scene in scenes
-        for match in re.findall(r"cue-(\\d{3})", scene["text"])
+        for match in re.findall(r"cue-(\d{3})", scene["text"])
     ]
     assert cue_ids == list(range(131))
     assert [len(scene["source_cues"]) for scene in scenes] == [1] * 131
