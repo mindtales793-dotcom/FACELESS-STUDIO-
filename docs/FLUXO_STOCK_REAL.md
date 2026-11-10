@@ -7,10 +7,11 @@ O modo padrão do FACELESS STUDIO passa a priorizar exclusivamente imagens e ví
 1. **Áudio e SRT:** use o SRT sincronizado com a narração. Quando ele ainda não existe ou está estimado, gere novamente com Groq Whisper na aba Arquivos. A transcrição usa o áudio real e produz horários; não use o texto do roteiro como se fosse uma legenda sincronizada.
 2. **Agrupamento semântico:** com `OPENROUTER_API_KEY` configurada, o OpenRouter agrupa cues consecutivos em cenas por ação/assunto. Ele só escolhe os pontos de corte: o texto e os timestamps originais do SRT são mantidos. Se a API falhar, o app usa o agrupamento temporal tradicional.
 3. **Interpretação da cena:** o modelo de texto recebe a fala atual, o contexto do roteiro e os blocos vizinhos. Ele cria consultas concretas para o que deve aparecer na imagem, não apenas para o tema geral.
-4. **Busca stock:** os provedores selecionados pesquisam fotos e vídeos. Novos projetos selecionam por padrão fontes stock disponíveis sem exigir YouTube. Bancos que exigem chave só entram automaticamente quando a chave está configurada.
-5. **Verificação visual:** o modelo multimodal compara as miniaturas e os metadados com a fala exata. Resultados aprovados recebem uma nota; resultados incompatíveis são descartados. Se a verificação estiver indisponível, o cartão informa que a prévia ainda precisa ser conferida manualmente.
-6. **Revisão:** confira a cena e sua mídia antes de renderizar. Uma miniatura não prova todo o conteúdo de um clipe; assista ao clipe antes de publicar.
-7. **Render:** o app usa FFmpeg/Remotion para montar as cenas, sincronizar a narração e aplicar as legendas.
+4. **Busca stock e YouTube:** os provedores pesquisam fotos e vídeos reais. O YouTube também pode retornar candidatos, mas eles são apenas prévias e não entram no render automaticamente.
+5. **Localização do momento no YouTube:** dentro da cena, escolha um candidato ou cole um link e confirme que possui direitos/licença/permissão para reutilizá-lo. O OpenRouter recebe o link como vídeo com processamento temporal `agentic`, junto com a fala exata e o contexto do SRT; o modelo retorna os tempos do momento visualmente compatível. O app baixa somente aquela seção, aplica o teto configurado (máximo absoluto de 10 s), extrai um quadro do mesmo intervalo e adiciona ambos à cena.
+6. **Verificação visual:** o modelo multimodal compara miniaturas e metadados dos bancos stock com a fala exata. Candidatos do YouTube não são aprovados pela miniatura: precisam da análise temporal descrita acima.
+7. **Revisão:** confira o trecho selecionado e a licença, a atribuição e as autorizações antes de renderizar/publicar.
+8. **Render:** o app usa FFmpeg/Remotion para montar as cenas, sincronizar a narração e aplicar as legendas.
 
 ## Modelos OpenRouter
 
@@ -23,7 +24,7 @@ Os dois campos também podem ser ajustados em **Mídia** nas configurações do 
 
 - SRT: Groq Whisper, idioma detectado automaticamente.
 - Agrupar SRT por significado: ativado.
-- Somente bancos de mídia real: ativado.
+- Geração de mídia por IA: desativada quando quiser usar somente arquivos reais; YouTube continua como banco opcional de candidatos.
 - Preferência: misturar fotos e vídeos.
 - OpenRouter textual e multimodal: modelo compatível com as tarefas.
 - Piloto automático: desligado até revisar o primeiro projeto e confirmar a qualidade dos resultados.
@@ -34,4 +35,6 @@ Os dois campos também podem ser ajustados em **Mídia** nas configurações do 
 - A IA sugere e verifica correspondência visual; não garante que cada frame do vídeo corresponda perfeitamente à fala.
 - Confira licença, atribuição, autorização de pessoas/marcas e regras de monetização de cada arquivo.
 - Fontes externas sem API pública confirmada abrem pesquisa no site e não fazem download automatizado.
-- Não use vídeo do YouTube como stock sem permissão. O modo stock-only remove YouTube da seleção e esconde a importação.
+- Candidatos do YouTube não são baixados nem renderizados automaticamente. A importação exige confirmação explícita de que o usuário tem licença ou autorização; o aplicativo não consegue comprovar essa declaração nem verificar direitos automaticamente.
+- O trecho importado do YouTube é limitado a no máximo 10 segundos, mesmo que o vídeo original seja longo. O quadro salvo vem do mesmo intervalo.
+- Use um modelo OpenRouter compatível com entrada de vídeo para localizar o momento temporal; a análise pode errar e o resultado precisa ser revisado antes de publicar.
