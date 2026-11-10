@@ -251,7 +251,7 @@ const PANES = {
   media(ctx) {
     const c = S.catalog, cfg = ctx.cfg, editing = !!ctx.projectId;
     const group = (kind, title, icon) => {
-      const list = c.sources.filter(s => s.kind === kind);
+      const list = c.sources.filter(s => s.kind === kind && (!cfg.stock_only || !s.id.startsWith('youtube_')));
       return `<div class="src-group"><div class="src-head">${ic(icon)}<h4>${title}</h4></div><div class="src-grid">${list.map(s => {
         const on = cfg.sources.includes(s.id);
         const pill = s.id === 'youtube_frame'
@@ -268,6 +268,10 @@ const PANES = {
       <div class="card-title"><div><h3>De onde vêm as imagens e vídeos?</h3><p>Marque os bancos que o robô deve pesquisar. As fontes sem chave funcionam de imediato.</p></div>
         <div class="quick"><button type="button" class="btn ghost small" data-quick="video">Só vídeos</button><button type="button" class="btn ghost small" data-quick="image">Só fotos</button><button type="button" class="btn ghost small" data-quick="ready">Todas disponíveis</button><button type="button" class="btn ghost small" data-quick="none">Limpar</button></div></div>
       ${group('video', 'Vídeos', 'film')}${group('image', 'Fotos e imagens', 'image')}
+      <div class="grid2" style="margin-top:14px">
+        <div>${toggle(ctx, 'stock_only', 'Somente bancos de mídia real', 'Padrão recomendado: desativa geração artificial e importação do YouTube.')}</div>
+        <div>${toggle(ctx, 'semantic_scene_grouping', 'Agrupar SRT por significado', 'OpenRouter agrupa legendas consecutivas em cenas coerentes, sem alterar horários ou falas.')}</div>
+      </div>
       <div class="card" style="margin-top:14px">
         <div class="card-title"><div><h3>Bancos alternativos</h3><p>Pesquise em bibliotecas menos repetidas sem raspar sites nem contornar seus limites.</p></div></div>
         <label class="field"><span>O que você está procurando?</span><input id="externalStockQuery" type="text" maxlength="120" placeholder="Ex.: vintage factory footage, old cars, city at night"></label>
@@ -294,7 +298,8 @@ const PANES = {
         <span>Modelo OpenRouter para interpretar o roteiro</span>
         <div class="row"><input id="openrouterModelInput" list="openrouterModelList" type="text" data-bind="openrouter_model" maxlength="120" value="${esc(cfg.openrouter_model || 'google/gemini-2.5-flash')}" placeholder="Ex.: google/gemini-2.5-flash" style="flex:1"><button type="button" class="btn ghost small" id="loadOpenRouterModelsBtn">Carregar modelos</button></div>
         <datalist id="openrouterModelList"></datalist>
-        <small>A chave OPENROUTER_API_KEY é cadastrada em Chaves de API. O OpenRouter é prioritário; se falhar, o estúdio tenta Gemini e depois a busca tradicional.</small>
+        <small>A chave OPENROUTER_API_KEY é cadastrada em Chaves de API. O modelo interpreta a fala e cria buscas específicas; se falhar, o app registra um aviso e usa fallback.</small>
+        <label class="field" style="margin-top:12px"><span>Modelo OpenRouter para conferir imagens (visão)</span><input type="text" data-bind="openrouter_vision_model" maxlength="120" value="${esc(cfg.openrouter_vision_model || 'google/gemini-2.5-flash')}" placeholder="google/gemini-2.5-flash"><small>Escolha um modelo multimodal que aceite imagens para comparar as miniaturas com a narração.</small></label>
       </div>
       ${editing ? '<div class="note info" style="margin-top:14px">As fontes valem para <b>Buscar tudo de novo</b>. O ritmo das cenas só pode ser escolhido ao criar o projeto.</div>' : `
       <div class="field" style="margin-top:18px"><span>Ritmo das cenas</span><div class="choices">${Object.entries(c.pacing).map(([k, l]) => `<button type="button" class="choice ${cfg.pacing === k ? 'on' : ''}" data-set="pacing" data-val="${k}"><b>${l}</b><small>${pacingDesc[k] || ''}</small></button>`).join('')}</div></div>`}
@@ -1957,7 +1962,8 @@ $('#viewProject').addEventListener('keydown', e => {
 /* ---------- cenas */
 function sceneHtml(s, i, p) {
   const opts = s.options || [], sel = Math.min(s.selected || 0, Math.max(0, opts.length - 1)), o = opts[sel];
-  const gen = s.gen || {}, flowOk = S.catalog.flow.ready;
+  const stockOnly = p.settings?.stock_only !== false;
+  const gen = s.gen || {}, flowOk = !stockOnly && S.catalog.flow.ready;
   const img = o && o.thumbnail ? `<img loading="lazy" referrerpolicy="no-referrer" alt="" src="${esc(o.thumbnail)}" onerror="this.style.display='none'">` : ic('image');
   const strip = opts.map((x, k) => `<button type="button" class="opt ${k === sel ? 'on' : ''}" data-pick="${k}" title="${esc(`${x.provider} · ${x.photographer || ''}${x.media_match_score != null ? ' · IA ' + x.media_match_score + '%' : ''}`)}"><img loading="lazy" referrerpolicy="no-referrer" alt="" src="${esc(x.thumbnail || '')}" onerror="this.style.opacity=0"><i>${x.media_type === 'video' ? '▶' : 'FOTO'}</i></button>`).join('');
   const line = o ? `<div class="src-line"><span>${esc(o.provider)}</span>${o.photographer ? `<span>· ${esc(o.photographer)}</span>` : ''}${o.license ? `<span>· ${esc(o.license)}</span>` : ''}${o.source_url ? `<a href="${esc(o.source_url)}" target="_blank" rel="noopener">origem ${ic('link')}</a>` : ''}</div>` : '';
@@ -1967,7 +1973,7 @@ function sceneHtml(s, i, p) {
   const open = S.genOpen[s.id];
   const genBox = open ? `<div class="gen-box"><div class="seg"><button type="button" class="${open.kind === 'image' ? 'on' : ''}" data-genkind="image">Imagem · Nano Banana</button><button type="button" class="${open.kind === 'video' ? 'on' : ''}" data-genkind="video">Vídeo · Veo</button></div><textarea data-genprompt placeholder="Descreva a cena…">${esc(open.prompt)}</textarea><div class="row">${open.kind === 'video' ? `<select data-gensec style="width:auto">${[4, 6, 8].map(n => `<option value="${n}" ${open.seconds === n ? 'selected' : ''}>${n} s</option>`).join('')}</select>` : ''}<button type="button" class="btn primary small" data-gen="go">${ic('spark')} Gerar</button><button type="button" class="btn ghost small" data-gen="close">Fechar</button></div><small class="hint">${open.kind === 'video' ? 'O Veo cobra por segundo na sua chave Gemini e leva alguns minutos.' : 'A imagem sai em alguns segundos e entra nas opções da cena.'}</small></div>` : '';
   const genMsg = gen.status === 'running' ? `<div class="gen-msg"><span class="spin"></span>${esc(gen.message || 'Gerando…')}</div>` : gen.status === 'failed' ? `<div class="gen-msg fail">${ic('alert')} ${esc(gen.message || 'Falhou')}</div>` : '';
-  const ytOpen = S.ytOpen[s.id];
+  const ytOpen = stockOnly ? null : S.ytOpen[s.id];
   const ytBox = ytOpen ? `
   <div class="gen-box">
     <div class="spread">
@@ -1997,7 +2003,7 @@ function sceneHtml(s, i, p) {
   ${opts.length ? `<div class="opt-strip">${strip}</div>${line}${matchInfo}` : `<div class="scene-empty">Nenhuma mídia compatível foi encontrada. Mude a busca, escolha outras fontes ou envie um arquivo.${esc(rejectedInfo)}</div>`}
   ${searchUsageInfo}
   ${(s.search_notes || []).length ? `<small class="hint">${esc(s.search_notes.join(' · '))}</small>` : ''}
-  <div class="scene-actions"><label class="btn ghost upl">${ic('upload')} Meu arquivo<input type="file" data-upload accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.m4v"></label>${flowOk ? `<button type="button" class="btn ghost" data-act2="gen">${ic('spark')} Gerar com IA</button>` : ''}<button type="button" class="btn ghost" data-act2="yt">${ic('film')} YouTube</button></div>
+  <div class="scene-actions"><label class="btn ghost upl">${ic('upload')} Meu arquivo<input type="file" data-upload accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.m4v"></label>${flowOk ? `<button type="button" class="btn ghost" data-act2="gen">${ic('spark')} Gerar com IA</button>` : ''}${stockOnly ? '' : '<button type="button" class="btn ghost" data-act2="yt">'+ic('film')+' YouTube</button>'}</div>
   ${ytBox}${genBox}${genMsg}</div></article>`;
 }
 function renderScenes(p) {
