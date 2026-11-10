@@ -53,5 +53,5 @@ Os dois campos também podem ser ajustados em **Mídia** nas configurações do 
 - O pipeline cria uma cena para cada cue SRT, sem juntar blocos por ritmo ou por interpretação semântica.
 - Cada cena herda o ID, o texto literal, o início e o fim do cue. A busca visual e a seleção de mídia acontecem separadamente para cada bloco.
 - A montagem ordena as cenas pelos timestamps do SRT; o início de cada mídia acompanha o início do bloco correspondente. A mídia fica ativa do início ao fim do cue; se houver intervalo vazio antes do próximo cue, o último quadro é mantido até o próximo início. Assim, o próximo bloco nunca começa antes do timestamp do SRT.
-- O limite padrão de cenas foi elevado para 1000. Se um arquivo exceder o limite configurado em `MAX_SCENES`, o log informa que houve limitação; ajuste essa variável para processar SRTs maiores.
+- Não há mais limite de 120/1000 cenas aplicado ao agrupamento: todos os cues são mantidos individualmente. Isso evita descartar ou juntar blocos e permite que cada um receba sua própria mídia.
 - O menu não exibe mais Flow AI, Flow Blocos nem Roteiros (Skills). Os estilos de vídeo continuam disponíveis.
