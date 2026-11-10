@@ -276,8 +276,21 @@ def analyze_project(pid: str) -> None:
                         max_consultas=3,
                         contexto=local_context,
                         model=settings.get("openrouter_model"),
+                        cue_texts=scene.get("source_cues") or [],
                     )
-                    queries = [str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()]
+                    cue_plans = plan.get("cue_plans") or []
+                    scene["cue_visual_plans"] = cue_plans
+                    # Prioriza buscas específicas de cada bloco SRT. As consultas
+                    # gerais da cena entram apenas como complemento.
+                    cue_queries = [
+                        str(query).strip()
+                        for cue_plan in cue_plans
+                        for query in (cue_plan.get("consultas") or [])
+                        if str(query).strip()
+                    ]
+                    queries = list(dict.fromkeys(cue_queries + [
+                        str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()
+                    ]))
                     if queries:
                         scene["search_queries"] = queries[:3]
                         scene["query"] = queries[0]
@@ -332,7 +345,7 @@ def analyze_project(pid: str) -> None:
 
             plan_data = {
                 key: scene.get(key) for key in
-                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider", "media_verification", "rejected_media_count", "search_usage")
+                ("query", "search_queries", "motion_score", "recommended_media", "visual_description", "query_ai_provider", "cue_visual_plans", "media_verification", "rejected_media_count", "search_usage")
                 if key in scene
             }
 
