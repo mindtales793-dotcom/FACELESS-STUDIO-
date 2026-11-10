@@ -176,7 +176,7 @@ def gerar_consultas_para_cena(
 ) -> dict[str, Any]:
     """Gera consultas, descrição e nota de movimento. Prioriza OpenRouter; usa Gemini e texto como fallback."""
     if idioma == "auto":
-        idioma = _detect_lang(texto)
+        idioma = _detect_lang(str(texto or "") + " " + str(contexto or ""))
 
     lang_instrucao = {
         "pt": "Escreva consultas em português e também em inglês para os bancos stock.",
@@ -204,14 +204,16 @@ def gerar_consultas_para_cena(
     )
 
     # Primeiro tenta OpenRouter. Erros de rede, crédito ou modelo não interrompem o projeto.
+    openrouter_error = "OPENROUTER_API_KEY não configurada"
     try:
         plan = _openrouter_plan(instrucao, model=model)
         if plan and plan.get("consultas"):
             plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
             plan["provider"] = "openrouter"
             return plan
-    except Exception:
-        pass
+        openrouter_error = "OpenRouter respondeu sem consultas visuais válidas."
+    except Exception as exc:
+        openrouter_error = str(exc)[:180]
 
     # Fallback: Gemini, mantendo o mesmo formato editorial.
     chave = _gemini_key()
@@ -233,6 +235,7 @@ def gerar_consultas_para_cena(
                 if plan and plan.get("consultas"):
                     plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
                     plan["provider"] = "gemini"
+                    plan["fallback_reason"] = openrouter_error
                     return plan
         except Exception:
             pass
