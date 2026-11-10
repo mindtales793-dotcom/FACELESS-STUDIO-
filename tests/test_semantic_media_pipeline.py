@@ -185,3 +185,34 @@ def test_stock_only_mantem_youtube_como_fonte_real_e_separa_modelo_de_visao(monk
     assert cfg["stock_only"] is True
     assert cfg["semantic_scene_grouping"] is True
     assert cfg["openrouter_vision_model"] == "google/gemini-2.5-flash"
+
+
+
+def test_scene_preserva_cada_cue_original_com_timestamps():
+    from scenes import parse_srt, _scene
+    cues = parse_srt(SRT)
+    scene = _scene(cues[:2], 1, "pt", "")
+    assert len(scene["source_cues"]) == 2
+    assert scene["source_cues"][0] == {
+        "id": "cue-0001", "start": 0.0, "end": 2.0,
+        "text": "Ele trabalhou durante anos na fábrica.",
+    }
+    assert scene["source_cues"][1]["start"] == 2.0
+    assert scene["source_cues"][1]["end"] == 4.0
+
+
+def test_parser_preserva_planos_visuais_individuais_por_cue():
+    import scene_planner
+    parsed = scene_planner._parse_json_plan(json.dumps({
+        "consultas": ["São Paulo 1970 aerial footage"],
+        "cue_plans": [{
+            "cue_id": "cue-0001",
+            "consultas": ["São Paulo 1970 street archive"],
+            "descricao_visual": "Ruas de São Paulo na década de 1970",
+            "recommended_media": "video",
+            "motion_score": 88,
+        }],
+    }, ensure_ascii=False))
+    assert parsed["cue_plans"][0]["cue_id"] == "cue-0001"
+    assert parsed["cue_plans"][0]["consultas"] == ["São Paulo 1970 street archive"]
+    assert parsed["cue_plans"][0]["motion_score"] == 88
