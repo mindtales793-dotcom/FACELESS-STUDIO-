@@ -1659,7 +1659,7 @@ def logout():
 @app.get("/api/catalog")
 def catalog():
     return {
-        "sources": providers.public_sources(), "templates": styles.public_templates(), "fonts": styles.FONT_CHOICES,
+        "sources": providers.public_sources(), "external_sources": providers.public_external_sources(), "templates": styles.public_templates(), "fonts": styles.FONT_CHOICES,
         "pacing": {k: v["label"] for k, v in styles.PACING.items()},
         "motions": {k: {"label": v["label"], "hint": v.get("hint", "")} for k, v in styles.MOTIONS.items()},
         "transitions": {k: {"label": v["label"], "mode": v.get("mode", "cut")} for k, v in styles.TRANSITIONS.items()},
