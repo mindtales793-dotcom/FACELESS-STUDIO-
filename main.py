@@ -58,9 +58,9 @@ from store import (
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
 try:
-    MAX_SCENES = max(1, int(os.getenv("MAX_SCENES", "120")))
+    MAX_SCENES = max(1, int(os.getenv("MAX_SCENES", "1000")))
 except (TypeError, ValueError):
-    MAX_SCENES = 120
+    MAX_SCENES = 1000
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "800"))
 AUDIO_EXT = (".mp3", ".wav", ".m4a", ".aac", ".ogg")
 MEDIA_IMG = (".jpg", ".jpeg", ".png", ".webp")
@@ -213,40 +213,13 @@ def analyze_project(pid: str) -> None:
         state = read_state(pid)
         settings = state["settings"]
         scenes = state["scenes"]
-        # Reagrupa as legendas em cenas que correspondem a ações/assuntos completos.
-        # Os tempos e textos originais do SRT são preservados; em falha, usa o fallback temporal.
-        if settings.get("semantic_scene_grouping", True) and os.getenv("OPENROUTER_API_KEY", "").strip() and state.get("srt_file"):
-            try:
-                srt_path = project_dir(pid) / state["srt_file"]
-                if srt_path.exists():
-                    srt_text = srt_path.read_text(encoding="utf-8-sig", errors="replace")
-                    lang = settings.get("search_lang", "auto")
-                    if lang == "auto":
-                        from scenes import detect_lang
-                        lang = detect_lang(" ".join(str(c.get("text") or "") for c in scenes[:80]))
-                    planned_scenes, semantic_capped, semantic_report = scene_planner.agrupar_cenas_por_significado(
-                        srt_text, ritmo=settings.get("pacing", "balanced"), idioma=lang,
-                        extra=settings.get("query_extra", ""), max_cenas=MAX_SCENES,
-                        model=settings.get("openrouter_model"),
-                    )
-                    if planned_scenes:
-                        scenes = planned_scenes
-                        def save_semantic(s: dict[str, Any]) -> None:
-                            s["scenes"] = planned_scenes
-                            s["semantic_scene_grouping"] = semantic_report
-                            s["scenes_rev"] = int(s.get("scenes_rev", 0)) + 1
-                            if semantic_capped:
-                                s.setdefault("log", []).append({"n": len(s.get("log", [])) + 1, "t": now_iso(), "stage": "parse", "level": "warn", "msg": "O limite de cenas foi aplicado após agrupar o SRT."})
-                        patch_state(pid, save_semantic)
-                        T.log(f"SRT reorganizado em {len(scenes)} cenas por significado ({semantic_report.get('provider', 'fallback')}); horários e falas preservados.", "info" if semantic_report.get("provider") == "openrouter" else "warn", stage="parse")
-                    elif semantic_report.get("reason"):
-                        T.log(str(semantic_report["reason"]), "warn", stage="parse")
-            except Exception as exc:
-                T.log(f"Não foi possível reagrupar o SRT; mantendo as cenas originais: {str(exc)[:180]}", "warn", stage="parse")
+        # Uma cena corresponde a um único cue SRT. Não reagrupar por semântica,
+        # pois isso quebraria a relação um-para-um entre fala, tempo e mídia.
+        T.log(f"Sincronização individual: {len(scenes)} blocos SRT serão pesquisados nos próprios intervalos.", stage="parse")
         if not settings["sources"]:
             raise RuntimeError("Selecione pelo menos uma fonte de mídia na aba Mídia.")
         patch_state(pid, lambda s: s.update({"status": "searching", "error": None, "cancel_requested": False, "progress": 0, "message": "Buscando mídia nos bancos selecionados..."}))
-        T.update(stage="search", status="running", detail=f"0 de {len(scenes)} cenas", progress=0,
+        T.update(stage="search", status="running", detail=f"0 de {len(scenes)} blocos SRT", progress=0,
                  log=f"Buscando em {len(settings['sources'])} fontes para {len(scenes)} cenas.")
         orientation = providers.orientation_for(settings["ratio"])
         counts: dict[str, int] = {}
