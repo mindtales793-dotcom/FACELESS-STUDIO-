@@ -264,6 +264,7 @@ def test_busca_distribui_primeiro_uma_fonte_para_cada_cue(monkeypatch):
         calls.append(("pixabay", query))
         return []
 
+    monkeypatch.setattr(providers, "provider_key", lambda *args: "key")
     monkeypatch.setattr(providers, "pexels_search", fake_pexels)
     monkeypatch.setattr(providers, "pixabay_search", fake_pixabay)
     providers.search_scene_assets(
@@ -272,3 +273,21 @@ def test_busca_distribui_primeiro_uma_fonte_para_cada_cue(monkeypatch):
         max_requests=2,
     )
     assert calls == [("pexels", "cue um"), ("pixabay", "cue dois")]
+
+
+
+def test_cada_cue_srt_vira_uma_cena_com_tempo_exato():
+    from scenes import group_cues
+    cues = [
+        {"id": "cue-000001", "start": 0.0, "end": 2.4, "text": "São Paulo, 1970."},
+        {"id": "cue-000002", "start": 2.4, "end": 5.8, "text": "Milhares chegavam em busca de oportunidades."},
+        {"id": "cue-000003", "start": 5.8, "end": 8.1, "text": "A cidade crescia rapidamente."},
+    ]
+    scenes, capped = group_cues(cues, "slow", "pt", "", 1000)
+    assert not capped
+    assert len(scenes) == len(cues)
+    for scene, cue in zip(scenes, cues):
+        assert scene["start"] == cue["start"]
+        assert scene["end"] == cue["end"]
+        assert scene["text"] == cue["text"]
+        assert scene["source_cues"] == [cue]
