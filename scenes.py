@@ -308,15 +308,9 @@ def _fit_groups_to_limit(groups: list[list[dict[str, Any]]], max_scenes: int) ->
 
 
 def group_cues(cues: list[dict[str, Any]], pacing: str, lang: str, extra: str, max_scenes: int) -> tuple[list[dict[str, Any]], bool]:
-    """Cria uma cena por cue SRT para que cada mídia tenha seu próprio intervalo."""
+    """Cria uma cena por cue SRT. max_scenes fica por compatibilidade, sem descartar cues."""
     scenes = [_scene([cue], n + 1, lang, extra) for n, cue in enumerate(cues)]
-    try:
-        scene_limit = max(1, int(max_scenes))
-    except (TypeError, ValueError):
-        scene_limit = 1000
-    if len(scenes) <= scene_limit:
-        return scenes, False
-    return scenes[:scene_limit], True
+    return scenes, False
 
 
 def _quality_score(option: dict[str, Any]) -> float:
