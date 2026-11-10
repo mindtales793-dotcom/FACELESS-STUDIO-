@@ -308,33 +308,15 @@ def _fit_groups_to_limit(groups: list[list[dict[str, Any]]], max_scenes: int) ->
 
 
 def group_cues(cues: list[dict[str, Any]], pacing: str, lang: str, extra: str, max_scenes: int) -> tuple[list[dict[str, Any]], bool]:
-    """Agrupa legendas em cenas conforme o ritmo. Retorna (cenas, ritmo_foi_limitado)."""
-    rule = PACING.get(pacing, PACING["balanced"])
-    max_span, max_words = rule["span"], rule["words"]
-    groups: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-    group_start = 0.0
-    for cue in cues:
-        if not current:
-            current, group_start = [cue], cue["start"]
-            continue
-        words = sum(len(c["text"].split()) for c in current)
-        if cue["end"] - group_start > max_span or words + len(cue["text"].split()) > max_words:
-            groups.append(current)
-            current, group_start = [cue], cue["start"]
-        else:
-            current.append(cue)
-    if current:
-        groups.append(current)
-
+    """Cria uma cena por cue SRT para que cada mídia tenha seu próprio intervalo."""
+    scenes = [_scene([cue], n + 1, lang, extra) for n, cue in enumerate(cues)]
     try:
         scene_limit = max(1, int(max_scenes))
     except (TypeError, ValueError):
-        scene_limit = 120
-    capped = len(groups) > scene_limit
-    if capped:
-        groups = _fit_groups_to_limit(groups, scene_limit)
-    return [_scene(g, n + 1, lang, extra) for n, g in enumerate(groups)], capped
+        scene_limit = 1000
+    if len(scenes) <= scene_limit:
+        return scenes, False
+    return scenes[:scene_limit], True
 
 
 def _quality_score(option: dict[str, Any]) -> float:
