@@ -2,13 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
-
-os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="faceless_semantic_tests_"))
-
-import main
-import scene_planner
 
 
 SRT = """1
@@ -37,6 +30,7 @@ class FakeResponse:
 
 
 def test_openrouter_agrupa_cues_por_significado_sem_alterar_tempo_ou_fala(monkeypatch):
+    import scene_planner
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     captured = {}
 
@@ -71,6 +65,7 @@ def test_openrouter_agrupa_cues_por_significado_sem_alterar_tempo_ou_fala(monkey
 
 
 def test_openrouter_agrupamento_invalido_usa_fallback_sem_perder_cues(monkeypatch):
+    import scene_planner
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     def fake_post(_url, **_kwargs):
@@ -88,6 +83,7 @@ def test_openrouter_agrupamento_invalido_usa_fallback_sem_perder_cues(monkeypatc
 
 
 def test_sem_openrouter_usa_agrupamento_temporal(monkeypatch):
+    import scene_planner
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     scenes, _capped, report = scene_planner.agrupar_cenas_por_significado(
         SRT, ritmo="balanced", idioma="pt", max_cenas=20,
@@ -97,6 +93,7 @@ def test_sem_openrouter_usa_agrupamento_temporal(monkeypatch):
 
 
 def test_stock_only_remove_youtube_e_separa_modelo_de_visao(monkeypatch):
+    import main
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     cfg = main.normalize_settings({
         "sources": ["youtube_video", "youtube_frame", "wikimedia_video", "openverse_image"],
