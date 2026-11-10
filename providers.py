@@ -535,7 +535,7 @@ def search_scene_assets(query: str, sources: list[str], source_counts: dict[str,
             query_list.append(clean)
     if smart and len(query_list) == 1 and len(query.split()) > 3:
         query_list.append(" ".join(query.split()[:3]))
-    query_list = query_list[:3]
+    query_list = query_list[:12]
 
     def run_source(source: str, q: str) -> None:
         nonlocal messages, requests_made
