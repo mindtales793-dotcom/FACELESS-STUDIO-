@@ -249,3 +249,26 @@ def test_prompt_visual_recebe_cada_cue_com_id_e_timestamps(monkeypatch):
     assert "São Paulo, 1970." in prompt
     assert "Milhares chegavam em busca de oportunidades." in prompt
     assert len(result["cue_plans"]) == 2
+
+
+
+def test_busca_distribui_primeiro_uma_fonte_para_cada_cue(monkeypatch):
+    import providers
+    calls = []
+
+    def fake_pexels(query, *_args, **_kwargs):
+        calls.append(("pexels", query))
+        return []
+
+    def fake_pixabay(query, *_args, **_kwargs):
+        calls.append(("pixabay", query))
+        return []
+
+    monkeypatch.setattr(providers, "pexels_search", fake_pexels)
+    monkeypatch.setattr(providers, "pixabay_search", fake_pixabay)
+    providers.search_scene_assets(
+        "cue um", ["pexels_video", "pixabay_video"], {},
+        per=1, queries=["cue um", "cue dois", "cue três"],
+        max_requests=2,
+    )
+    assert calls == [("pexels", "cue um"), ("pixabay", "cue dois")]
