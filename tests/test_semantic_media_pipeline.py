@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="faceless_semantic_tests_"))
 
 import main
 import scene_planner
