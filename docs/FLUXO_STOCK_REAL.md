@@ -46,3 +46,12 @@ Os dois campos também podem ser ajustados em **Mídia** nas configurações do 
 - A IA recebe os cues individualmente e devolve `cue_visual_plans`; cada plano contém consultas, descrição visual, preferência por foto/vídeo e pontuação de movimento.
 - A busca usa primeiro as consultas específicas de cada cue e depois as consultas gerais da cena. Assim, uma frase como “São Paulo, 1970...” pode buscar imagens históricas daquele local e período, sem se perder em uma consulta genérica sobre urbanização.
 - Se o provedor não devolver planos por cue, o fallback mantém um plano textual individual para cada bloco. Nenhum texto ou timestamp é inventado.
+
+
+## Sincronização visual por bloco
+
+- O pipeline cria uma cena para cada cue SRT, sem juntar blocos por ritmo ou por interpretação semântica.
+- Cada cena herda o ID, o texto literal, o início e o fim do cue. A busca visual e a seleção de mídia acontecem separadamente para cada bloco.
+- A montagem ordena as cenas pelos timestamps do SRT; o início de cada mídia acompanha o início do bloco correspondente. A duração de cada trecho visual acompanha a posição do próximo bloco na timeline, evitando deslocar a sequência da narração.
+- O limite padrão de cenas foi elevado para 1000. Se um arquivo exceder o limite configurado em `MAX_SCENES`, o log informa que houve limitação; ajuste essa variável para processar SRTs maiores.
+- O menu não exibe mais Flow AI, Flow Blocos nem Roteiros (Skills). Os estilos de vídeo continuam disponíveis.
