@@ -279,6 +279,20 @@ def analyze_project(pid: str) -> None:
                         cue_texts=scene.get("source_cues") or [],
                     )
                     cue_plans = plan.get("cue_plans") or []
+                    if not cue_plans:
+                        # Compatibilidade com modelos que retornam somente o plano geral:
+                        # mantém uma pesquisa de fallback individual para cada cue.
+                        cue_plans = [
+                            {
+                                "cue_id": str(cue.get("id") or ""),
+                                "consultas": [str(cue.get("text") or "")[:100]],
+                                "descricao_visual": str(cue.get("text") or "")[:240],
+                                "recommended_media": "video",
+                                "motion_score": 50,
+                                "fallback": True,
+                            }
+                            for cue in (scene.get("source_cues") or [])
+                        ]
                     scene["cue_visual_plans"] = cue_plans
                     # Prioriza buscas específicas de cada bloco SRT. As consultas
                     # gerais da cena entram apenas como complemento.
