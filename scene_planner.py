@@ -197,6 +197,7 @@ def gerar_consultas_para_cena(
     contexto: str = "",
     model: str | None = None,
     cue_texts: list[dict[str, Any]] | None = None,
+    usar_openrouter: bool = True,
 ) -> dict[str, Any]:
     """Gera consultas para a cena e um plano visual independente para cada cue SRT.
 
@@ -234,17 +235,29 @@ def gerar_consultas_para_cena(
         'Formato: {"palavras_chave":["..."],"consultas":["...","..."],"descricao_visual":"...","motion_score":65,"recommended_media":"video","cue_plans":[{"cue_id":"cue-0001","consultas":["..."],"descricao_visual":"...","motion_score":70,"recommended_media":"video"}]}'
     )
 
-    # Primeiro tenta OpenRouter. Erros de rede, crédito ou modelo não interrompem o projeto.
+    # Primeiro tenta OpenRouter. HTTP 402 sinaliza falta de créditos/limite de cobrança;
+    # nesse caso o chamador pausa novas chamadas durante o restante desta busca.
     openrouter_error = "OPENROUTER_API_KEY não configurada"
-    try:
-        plan = _openrouter_plan(instrucao, model=model)
-        if plan and plan.get("consultas"):
-            plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
-            plan["provider"] = "openrouter"
-            return plan
-        openrouter_error = "OpenRouter respondeu sem consultas visuais válidas."
-    except Exception as exc:
-        openrouter_error = str(exc)[:180]
+    openrouter_quota_exhausted = False
+    if usar_openrouter:
+        try:
+            plan = _openrouter_plan(instrucao, model=model)
+            if plan and plan.get("consultas"):
+                plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
+                plan["provider"] = "openrouter"
+                return plan
+            openrouter_error = "OpenRouter respondeu sem consultas visuais válidas."
+        except Exception as exc:
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
+            error_text = str(exc).lower()
+            openrouter_quota_exhausted = status_code == 402 or "402" in error_text or "payment required" in error_text
+            if openrouter_quota_exhausted:
+                openrouter_error = "HTTP 402 Payment Required: saldo ou limite de créditos do OpenRouter insuficiente."
+            else:
+                openrouter_error = str(exc)[:180]
+    else:
+        openrouter_error = "OpenRouter pausado nesta busca após HTTP 402; usando Gemini ou termos locais."
 
     # Fallback: Gemini, mantendo o mesmo formato editorial.
     chave = _gemini_key()
@@ -267,6 +280,7 @@ def gerar_consultas_para_cena(
                     plan["consultas"] = plan["consultas"][:max(1, min(4, max_consultas))]
                     plan["provider"] = "gemini"
                     plan["fallback_reason"] = openrouter_error
+                    plan["openrouter_quota_exhausted"] = openrouter_quota_exhausted or not usar_openrouter
                     return plan
         except Exception:
             pass
@@ -289,6 +303,7 @@ def gerar_consultas_para_cena(
         ],
         "provider": "fallback",
         "fallback_reason": openrouter_error,
+        "openrouter_quota_exhausted": openrouter_quota_exhausted or not usar_openrouter,
     }
 
 
