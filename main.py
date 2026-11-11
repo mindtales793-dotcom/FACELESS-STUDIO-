@@ -173,6 +173,7 @@ def _verify_scene_options(
     options: list[dict[str, Any]],
     settings: dict[str, Any],
     context: str = "",
+    disable_openrouter: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Filtra resultados por compatibilidade visual com a fala do bloco."""
     if not options:
@@ -190,6 +191,7 @@ def _verify_scene_options(
                 candidates=verifiable_candidates,
                 model=settings.get("openrouter_vision_model") or settings.get("openrouter_model"),
                 min_score=68,
+                disable_openrouter=disable_openrouter,
             )
             options = verified + manual_candidates
         else:
@@ -226,6 +228,9 @@ def analyze_project(pid: str) -> None:
         warnings: list[str] = []
         total_found = 0
 
+        # HTTP 402 abre um disjuntor apenas durante este projeto, evitando repetir
+        # chamadas sem crédito em centenas de cenas.
+        openrouter_disabled = False
         # A IA recebe cada trecho junto de uma amostra do contexto geral do roteiro.
         # OpenRouter é prioritário; scene_planner usa Gemini e busca tradicional como fallback.
         script_context = ""
@@ -250,7 +255,16 @@ def analyze_project(pid: str) -> None:
                         contexto=local_context,
                         model=settings.get("openrouter_model"),
                         cue_texts=scene.get("source_cues") or [],
+                        usar_openrouter=not openrouter_disabled,
                     )
+                    if plan.get("openrouter_quota_exhausted") and not openrouter_disabled:
+                        openrouter_disabled = True
+                        T.log(
+                            "OpenRouter retornou HTTP 402 (créditos ou limite de cobrança insuficiente). "
+                            "Desativei novas chamadas nesta busca; as cenas restantes usarão Gemini, se configurado, "
+                            "ou termos locais sem interromper a sincronização do SRT.",
+                            "warn", stage="search",
+                        )
                     cue_plans = plan.get("cue_plans") or []
                     if not cue_plans:
                         # Compatibilidade com modelos que retornam somente o plano geral:
@@ -285,9 +299,9 @@ def analyze_project(pid: str) -> None:
                     scene["recommended_media"] = plan.get("recommended_media", "video")
                     scene["visual_description"] = plan.get("descricao_visual", "")
                     scene["query_ai_provider"] = plan.get("provider", "fallback")
-                    if scene["query_ai_provider"] == "fallback":
+                    if scene["query_ai_provider"] == "fallback" and not openrouter_disabled:
                         reason = str(plan.get("fallback_reason") or "sem detalhe")[:140]
-                        T.log(f"OpenRouter indisponível na cena {scene_index + 1}: {reason}. Usando termos locais.", "warn", stage="search")
+                        T.log(f"IA visual indisponível na cena {scene_index + 1}: {reason}. Usando termos locais.", "warn", stage="search")
                 except Exception as exc:
                     T.log(f"IA visual: fallback para busca tradicional nesta cena ({str(exc)[:100]}).", "warn", stage="search")
 
@@ -310,7 +324,18 @@ def analyze_project(pid: str) -> None:
                     "warn", stage="search",
                 )
             local_context = _scene_search_context(scenes, idx, script_context)
-            options, media_report = _verify_scene_options(scene, options, settings, local_context)
+            options, media_report = _verify_scene_options(
+                scene, options, settings, local_context,
+                disable_openrouter=openrouter_disabled,
+            )
+            if media_report.get("quota_exhausted") and not openrouter_disabled:
+                openrouter_disabled = True
+                T.log(
+                    "OpenRouter retornou HTTP 402 durante a conferência visual. "
+                    "Novas verificações por IA foram pausadas; as prévias restantes serão mantidas "
+                    "como não verificadas, sem interromper a busca.",
+                    "warn", stage="search",
+                )
             if media_report.get("status") == "verified":
                 T.log(
                     f"Conferência visual da cena {idx + 1}: {media_report.get('accepted', 0)} aprovadas; "
