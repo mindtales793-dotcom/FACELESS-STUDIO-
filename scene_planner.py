@@ -160,9 +160,8 @@ def _openrouter_plan(prompt: str, model: str | None = None) -> dict[str, Any] | 
     key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not key:
         return None
-    selected_model = (model or os.getenv("OPENROUTER_MODEL") or "google/gemini-2.5-flash").strip()
-    if not selected_model:
-        selected_model = "google/gemini-2.5-flash"
+    # O roteador gratuito escolhe automaticamente um modelo :free compatível.
+    selected_model = "openrouter/free"
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -198,6 +197,7 @@ def gerar_consultas_para_cena(
     model: str | None = None,
     cue_texts: list[dict[str, Any]] | None = None,
     usar_openrouter: bool = True,
+    usar_gemini: bool = True,
 ) -> dict[str, Any]:
     """Gera consultas para a cena e um plano visual independente para cada cue SRT.
 
@@ -261,7 +261,7 @@ def gerar_consultas_para_cena(
 
     # Fallback: Gemini, mantendo o mesmo formato editorial.
     chave = _gemini_key()
-    if chave:
+    if chave and usar_gemini:
         corpo = {
             "contents": [{"parts": [{"text": instrucao}]}],
             "generationConfig": {"temperature": 0.35},
@@ -389,7 +389,7 @@ def agrupar_cenas_por_significado(
                     "X-OpenRouter-Title": "Faceless Studio - Semantic SRT Scenes",
                 },
                 json={
-                    "model": (model or os.getenv("OPENROUTER_MODEL") or "google/gemini-2.5-flash").strip(),
+                    "model": "openrouter/free",
                     "messages": [
                         {"role": "system", "content": "Agrupe cues por continuidade visual. Responda somente JSON válido."},
                         {"role": "user", "content": prompt},
