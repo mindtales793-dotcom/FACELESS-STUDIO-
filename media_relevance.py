@@ -68,6 +68,7 @@ def verify_scene_candidates(
     candidates: list[dict[str, Any]] | None = None,
     model: str | None = None,
     min_score: int = DEFAULT_MIN_SCORE,
+    disable_openrouter: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Retorna somente prévias compatíveis após uma resposta válida do OpenRouter.
 
@@ -78,6 +79,13 @@ def verify_scene_candidates(
     threshold = max(50, min(95, int(min_score or DEFAULT_MIN_SCORE)))
     if not items:
         return [], {"status": "empty", "checked": 0, "accepted": 0, "rejected": 0, "threshold": threshold}
+
+    if disable_openrouter:
+        return items, {
+            "status": "unavailable", "checked": 0, "accepted": len(items), "rejected": 0,
+            "threshold": threshold, "quota_exhausted": True,
+            "message": "Verificação visual do OpenRouter pausada nesta busca após HTTP 402; prévias mantidas sem validação por IA.",
+        }
 
     key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not key:
@@ -157,9 +165,18 @@ def verify_scene_candidates(
         raw = _content_text((((payload.get("choices") or [{}])[0].get("message") or {}).get("content")))
         scored = _parse_results(raw)
     except Exception as exc:
+        response_error = getattr(exc, "response", None)
+        status_code = getattr(response_error, "status_code", None)
+        error_text = str(exc).lower()
+        quota_exhausted = status_code == 402 or "402" in error_text or "payment required" in error_text
+        message = (
+            "HTTP 402 Payment Required: saldo ou limite de créditos do OpenRouter insuficiente."
+            if quota_exhausted
+            else f"OpenRouter não conseguiu conferir as prévias: {str(exc)[:180]}"
+        )
         return items, {
             "status": "unavailable", "checked": 0, "accepted": len(items), "rejected": 0,
-            "threshold": threshold, "message": f"OpenRouter não conseguiu conferir as prévias: {str(exc)[:180]}",
+            "threshold": threshold, "message": message, "quota_exhausted": quota_exhausted,
         }
 
     known_indices = {index for index, _, _ in indexed}
