@@ -184,7 +184,7 @@ def test_stock_only_mantem_youtube_como_fonte_real_e_separa_modelo_de_visao(monk
     assert "openverse_image" in cfg["sources"]
     assert cfg["stock_only"] is True
     assert cfg["semantic_scene_grouping"] is True
-    assert cfg["openrouter_vision_model"] == "google/gemini-2.5-flash"
+    assert cfg["openrouter_vision_model"] == "openrouter/free"
 
 
 

@@ -320,7 +320,7 @@ def test_normalize_settings_limita_percentual_e_duracao_de_clipes():
     })
     assert cfg["video_percent"] == 100
     assert cfg["max_video_seconds"] == 10
-    assert cfg["openrouter_model"] == "google/gemini-2.5-flash"
+    assert cfg["openrouter_model"] == "openrouter/free"
     assert cfg["max_search_requests"] == 24
 
     cfg = main.normalize_settings({"video_percent": -5, "max_video_seconds": 0, "max_search_requests": 0})
@@ -389,7 +389,7 @@ def test_openrouter_gera_consultas_com_contexto_e_nota_de_movimento(monkeypatch)
     assert plan["motion_score"] == 92
     assert plan["recommended_media"] == "video"
     assert "contexto" in captured["body"]["messages"][1]["content"].lower()
-    assert captured["body"]["model"] == "google/gemini-2.5-flash"
+    assert captured["body"]["model"] == "openrouter/free"
 
 
 def test_storyblocks_assinatura_hmac_tem_formato_valido():
