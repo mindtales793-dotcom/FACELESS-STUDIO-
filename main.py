@@ -106,8 +106,9 @@ def normalize_settings(raw: dict[str, Any] | None, base: dict[str, Any] | None =
     out["video_percent"] = int(_num(raw.get("video_percent", cur.get("video_percent", 50)), 0, 100, 50))
     # O limite superior é fixo em 10 s; pode ser reduzido por projeto.
     out["max_video_seconds"] = int(_num(raw.get("max_video_seconds", cur.get("max_video_seconds", 10)), 1, 10, 10))
-    out["openrouter_model"] = " ".join(str(raw.get("openrouter_model", cur.get("openrouter_model", os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")))).split())[:120]
-    out["openrouter_vision_model"] = " ".join(str(raw.get("openrouter_vision_model", cur.get("openrouter_vision_model", os.getenv("OPENROUTER_VISION_MODEL", "google/gemini-2.5-flash")))).split())[:120]
+    # Força o roteador gratuito inclusive em projetos criados com configurações antigas.
+    out["openrouter_model"] = "openrouter/free"
+    out["openrouter_vision_model"] = "openrouter/free"
     out["semantic_scene_grouping"] = bool(raw.get("semantic_scene_grouping", cur.get("semantic_scene_grouping", True)))
     out["stock_only"] = bool(raw.get("stock_only", cur.get("stock_only", True)))
     # stock_only desativa geração artificial; fontes reais do YouTube continuam disponíveis
@@ -243,67 +244,72 @@ def analyze_project(pid: str) -> None:
                 script_context = ""
         if not script_context:
             script_context = " ".join(str(sc.get("text") or "") for sc in scenes)[:2600]
-        if os.getenv("OPENROUTER_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip():
-            for scene_index, scene in enumerate(scenes):
+        # Planejamento em lote: até 20 cenas por chamada, preservando cue_id e timestamps.
+        if os.getenv("OPENROUTER_API_KEY", "").strip():
+            batch_size = 20
+            for batch_start in range(0, len(scenes), batch_size):
                 T.check()
-                try:
-                    local_context = _scene_search_context(scenes, scene_index, script_context)
-                    plan = scene_planner.gerar_consultas_para_cena(
-                        str(scene.get("text") or scene.get("query") or ""),
-                        idioma=settings.get("search_lang", "auto"),
-                        max_consultas=3,
-                        contexto=local_context,
-                        model=settings.get("openrouter_model"),
-                        cue_texts=scene.get("source_cues") or [],
-                        usar_openrouter=not openrouter_disabled,
-                    )
-                    if plan.get("openrouter_quota_exhausted") and not openrouter_disabled:
-                        openrouter_disabled = True
-                        T.log(
-                            "OpenRouter retornou HTTP 402 (créditos ou limite de cobrança insuficiente). "
-                            "Desativei novas chamadas nesta busca; as cenas restantes usarão Gemini, se configurado, "
-                            "ou termos locais sem interromper a sincronização do SRT.",
-                            "warn", stage="search",
+                batch = scenes[batch_start:batch_start + batch_size]
+                batch_cues: list[dict[str, Any]] = []
+                for local_index, scene in enumerate(batch):
+                    scene_index = batch_start + local_index
+                    source_cues = scene.get("source_cues") or [{
+                        "id": str(scene.get("id") or f"cue-{scene_index + 1}"),
+                        "start": scene.get("start", scene.get("inicio", 0)),
+                        "end": scene.get("end", scene.get("fim", 0)),
+                        "text": scene.get("text") or scene.get("query") or "",
+                    }]
+                    for cue_index, cue in enumerate(source_cues):
+                        cue_id = str(cue.get("id") or f"{scene.get('id', scene_index)}-{cue_index}")
+                        batch_cues.append({
+                            "id": cue_id,
+                            "start": cue.get("start", cue.get("inicio", 0)),
+                            "end": cue.get("end", cue.get("fim", 0)),
+                            "text": str(cue.get("text") or cue.get("fala") or scene.get("text") or "")[:500],
+                        })
+                if openrouter_disabled:
+                    plan = {"provider": "fallback", "consultas": [], "motion_score": 50, "recommended_media": "video", "descricao_visual": "", "cue_plans": [], "openrouter_quota_exhausted": True, "fallback_reason": "Cota gratuita do OpenRouter esgotada nesta busca."}
+                else:
+                    try:
+                        batch_text = " ".join(str(cue.get("text") or "") for cue in batch_cues)[:9000]
+                        batch_context = _scene_search_context(scenes, batch_start, script_context)
+                        plan = scene_planner.gerar_consultas_para_cena(
+                            batch_text, idioma=settings.get("search_lang", "auto"), max_consultas=3,
+                            contexto=batch_context, model="openrouter/free", cue_texts=batch_cues[:40],
+                            usar_openrouter=True, usar_gemini=False,
                         )
-                    cue_plans = plan.get("cue_plans") or []
-                    if not cue_plans:
-                        # Compatibilidade com modelos que retornam somente o plano geral:
-                        # mantém uma pesquisa de fallback individual para cada cue.
-                        cue_plans = [
-                            {
-                                "cue_id": str(cue.get("id") or ""),
-                                "consultas": [str(cue.get("text") or "")[:100]],
-                                "descricao_visual": str(cue.get("text") or "")[:240],
-                                "recommended_media": "video",
-                                "motion_score": 50,
-                                "fallback": True,
-                            }
-                            for cue in (scene.get("source_cues") or [])
-                        ]
+                    except Exception as exc:
+                        plan = {"provider": "fallback", "consultas": [], "motion_score": 50, "recommended_media": "video", "descricao_visual": "", "cue_plans": [], "fallback_reason": str(exc)[:180]}
+                if plan.get("openrouter_quota_exhausted") and not openrouter_disabled:
+                    openrouter_disabled = True
+                    T.log("A cota gratuita do OpenRouter acabou ou a API retornou HTTP 402. Interrompi novas chamadas de IA nesta busca; as cenas restantes continuarão com consultas locais, sem trocar para provedores pagos.", "warn", stage="search")
+                returned_plans = {str(item.get("cue_id") or ""): item for item in (plan.get("cue_plans") or []) if isinstance(item, dict) and str(item.get("cue_id") or "")}
+                for local_index, scene in enumerate(batch):
+                    scene_index = batch_start + local_index
+                    source_cues = scene.get("source_cues") or [{"id": str(scene.get("id") or f"cue-{scene_index + 1}"), "text": scene.get("text") or scene.get("query") or ""}]
+                    cue_plans = []
+                    for cue_index, cue in enumerate(source_cues):
+                        cue_id = str(cue.get("id") or f"{scene.get('id', scene_index)}-{cue_index}")
+                        cue_plan = returned_plans.get(cue_id)
+                        if cue_plan:
+                            cue_plans.append(cue_plan)
+                        else:
+                            cue_text = str(cue.get("text") or cue.get("fala") or scene.get("text") or "")
+                            cue_plans.append({"cue_id": cue_id, "consultas": [cue_text[:100]] if cue_text else [], "descricao_visual": cue_text[:240], "recommended_media": "video", "motion_score": 50, "fallback": True})
                     scene["cue_visual_plans"] = cue_plans
-                    # Prioriza buscas específicas de cada bloco SRT. As consultas
-                    # gerais da cena entram apenas como complemento.
-                    cue_queries = [
-                        str(query).strip()
-                        for cue_plan in cue_plans
-                        for query in (cue_plan.get("consultas") or [])
-                        if str(query).strip()
-                    ]
-                    queries = list(dict.fromkeys(cue_queries + [
-                        str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()
-                    ]))
+                    cue_queries = [str(query).strip() for cue_plan in cue_plans for query in (cue_plan.get("consultas") or []) if str(query).strip()]
+                    queries = list(dict.fromkeys(cue_queries + [str(q).strip() for q in (plan.get("consultas") or []) if str(q).strip()]))
                     if queries:
                         scene["search_queries"] = queries[:12]
                         scene["query"] = queries[0]
-                    scene["motion_score"] = int(plan.get("motion_score", 50))
-                    scene["recommended_media"] = plan.get("recommended_media", "video")
-                    scene["visual_description"] = plan.get("descricao_visual", "")
+                    first_plan = cue_plans[0] if cue_plans else {}
+                    scene["motion_score"] = int(first_plan.get("motion_score", plan.get("motion_score", 50)))
+                    scene["recommended_media"] = first_plan.get("recommended_media", plan.get("recommended_media", "video"))
+                    scene["visual_description"] = first_plan.get("descricao_visual") or plan.get("descricao_visual", "")
                     scene["query_ai_provider"] = plan.get("provider", "fallback")
-                    if scene["query_ai_provider"] == "fallback" and not openrouter_disabled:
-                        reason = str(plan.get("fallback_reason") or "sem detalhe")[:140]
-                        T.log(f"IA visual indisponível na cena {scene_index + 1}: {reason}. Usando termos locais.", "warn", stage="search")
-                except Exception as exc:
-                    T.log(f"IA visual: fallback para busca tradicional nesta cena ({str(exc)[:100]}).", "warn", stage="search")
+                if plan.get("provider") == "fallback" and not openrouter_disabled:
+                    reason = str(plan.get("fallback_reason") or "modelo gratuito indisponível")[:140]
+                    T.log(f"Planejamento em lote {batch_start // batch_size + 1}: {reason}. Usando termos locais.", "warn", stage="search")
 
         for idx, scene in enumerate(scenes):
             T.check()
@@ -324,10 +330,19 @@ def analyze_project(pid: str) -> None:
                     "warn", stage="search",
                 )
             local_context = _scene_search_context(scenes, idx, script_context)
-            options, media_report = _verify_scene_options(
-                scene, options, settings, local_context,
-                disable_openrouter=openrouter_disabled,
-            )
+            free_vision_enabled = os.getenv("OPENROUTER_FREE_VISION", "").strip().lower() in ("1", "true", "yes", "on")
+            if free_vision_enabled:
+                options, media_report = _verify_scene_options(
+                    scene, options, settings, local_context,
+                    disable_openrouter=openrouter_disabled,
+                )
+            else:
+                # Evita uma chamada multimodal por cena e reserva a cota free para planejamento em lote.
+                media_report = {
+                    "status": "skipped", "checked": 0, "accepted": len(options),
+                    "rejected": 0, "threshold": 68,
+                    "message": "Verificação visual por IA desativada para economizar a cota gratuita.",
+                }
             if media_report.get("quota_exhausted") and not openrouter_disabled:
                 openrouter_disabled = True
                 T.log(
