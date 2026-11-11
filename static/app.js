@@ -114,7 +114,7 @@ function defaultCfg() {
   const t = S.catalog.templates[0];
   return {
     ratio: t.ratio, quality: '720p', sources, media_pref: 'mixed', video_percent: 50, max_video_seconds: 10,
-    openrouter_model: 'google/gemini-2.5-flash', openrouter_vision_model: 'google/gemini-2.5-flash', semantic_scene_grouping: true, stock_only: true, per_source: 3, max_search_requests: 12, pacing: t.pacing, search_lang: 'auto', query_extra: '',
+    openrouter_model: 'openrouter/free', openrouter_vision_model: 'openrouter/free', semantic_scene_grouping: true, stock_only: true, per_source: 3, max_search_requests: 12, pacing: t.pacing, search_lang: 'auto', query_extra: '',
     template: t.id, style: {}, autopilot: false, auto_capcut: false,
     audio: { music_id: null, music_volume: t.audio.music_volume, narration_volume: 1, ducking: true, duck_level: 'medium', fade_in: 2, fade_out: 3, loop: true, normalize: false },
   };
