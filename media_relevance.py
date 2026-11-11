@@ -13,7 +13,7 @@ from typing import Any
 import requests
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-2.5-flash"
+DEFAULT_MODEL = "openrouter/free"
 MAX_CANDIDATES = 8
 DEFAULT_MIN_SCORE = 68
 
@@ -94,7 +94,8 @@ def verify_scene_candidates(
             "threshold": threshold, "message": "Configure OPENROUTER_API_KEY para conferir as prévias com visão.",
         }
 
-    selected_model = (model or os.getenv("OPENROUTER_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    # O roteador gratuito seleciona automaticamente um modelo com visão quando disponível.
+    selected_model = "openrouter/free"
     indexed = []
     for index, item in enumerate(items[:MAX_CANDIDATES]):
         thumbnail = str(item.get("thumbnail") or "").strip()
