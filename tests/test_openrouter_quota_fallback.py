@@ -91,3 +91,38 @@ def test_verificacao_visual_identifica_http_402(monkeypatch):
     assert report["status"] == "unavailable"
     assert report["quota_exhausted"] is True
     assert "402" in report["message"]
+
+
+def test_openrouter_planejador_forca_roteador_free_mesmo_com_modelo_pago(monkeypatch):
+    import scene_planner
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    captured = {}
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"choices": [{"message": {"content": '{"consultas":["factory workers"]}'}}]}
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs.get("json") or {})
+        return FakeResponse()
+    monkeypatch.setattr(scene_planner.requests, "post", fake_post)
+    scene_planner._openrouter_plan("prompt", model="provider/model-pago")
+    assert captured["model"] == "openrouter/free"
+
+
+def test_planejamento_free_nao_chama_gemini_quando_desativado(monkeypatch):
+    import scene_planner
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
+    def fail_openrouter(*_args, **_kwargs):
+        raise RuntimeError("modelo free indisponível")
+    def fail_gemini(*_args, **_kwargs):
+        raise AssertionError("Não pode chamar Gemini neste modo.")
+    monkeypatch.setattr(scene_planner, "_openrouter_plan", fail_openrouter)
+    monkeypatch.setattr(scene_planner.requests, "post", fail_gemini)
+    result = scene_planner.gerar_consultas_para_cena(
+        "Uma fábrica no centro da cidade.", usar_openrouter=True, usar_gemini=False,
+        cue_texts=[{"id":"c1","text":"Uma fábrica no centro da cidade."}],
+    )
+    assert result["provider"] == "fallback"
+    assert result["cue_plans"][0]["cue_id"] == "c1"
